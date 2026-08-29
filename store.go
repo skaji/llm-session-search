@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -126,6 +127,11 @@ type Record struct {
 	Text        string
 }
 
+type recordMatch struct {
+	Record
+	MatchedTerms []string
+}
+
 type SearchHit struct {
 	Session
 	Record
@@ -235,6 +241,10 @@ func (s *Store) ListSearchHistory(ctx context.Context, limit int) ([]string, err
 }
 
 func (s *Store) Search(ctx context.Context, query string, limit, offset int) ([]SearchHit, error) {
+	return s.search(ctx, query, "", limit, offset)
+}
+
+func (s *Store) search(ctx context.Context, query, cwd string, limit, offset int) ([]SearchHit, error) {
 	terms := parseSearchQuery(query)
 	if len(terms) == 0 {
 		return nil, nil
@@ -261,11 +271,19 @@ func (s *Store) Search(ctx context.Context, query string, limit, offset int) ([]
 		JOIN records r
 		  ON r.session_key = matches.session_key
 		 AND r.line_number = matches.line_number
-		JOIN sessions s ON s.key = r.session_key
+		JOIN sessions s ON s.key = r.session_key`
+	args = append(args, len(terms))
+	if cwd != "" {
+		prefix := strings.TrimRight(cwd, "/") + "/"
+		statement += `
+		WHERE s.cwd = ? OR substr(s.cwd, 1, length(?)) = ?`
+		args = append(args, cwd, prefix, prefix)
+	}
+	statement += `
         ORDER BY coalesce(s.updated_at_ms, 0) DESC,
                  coalesce(r.timestamp_ms, 0) DESC
         LIMIT ? OFFSET ?`
-	args = append(args, len(terms), limit, offset)
+	args = append(args, limit, offset)
 	rows, err := s.db.QueryContext(ctx, statement, args...)
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
@@ -284,38 +302,70 @@ func (s *Store) Search(ctx context.Context, query string, limit, offset int) ([]
 	return hits, rows.Err()
 }
 
-func (s *Store) sessionMatchRecords(ctx context.Context, sessionKey int64, query string, limit int) ([]Record, error) {
+func (s *Store) sessionMatchRecords(ctx context.Context, sessionKey int64, query string, limit int) ([]recordMatch, error) {
 	terms := parseSearchQuery(query)
 	if len(terms) == 0 || limit <= 0 {
 		return nil, nil
 	}
 	termSQL, args := termHitsSQL(terms, sessionKey)
 	statement := `
-        WITH term_hits(term_number, line_number) AS (` + termSQL + `),
-        matched_lines AS (
-            SELECT DISTINCT line_number FROM term_hits
-            WHERE (SELECT count(DISTINCT term_number) FROM term_hits) = ?
-        )
-		SELECT r.line_number, r.timestamp_ms, r.role, r.phase, r.text
-		FROM matched_lines
-		JOIN records r ON r.session_key = ? AND r.line_number = matched_lines.line_number
-		ORDER BY r.line_number DESC LIMIT ?`
-	args = append(args, len(terms), sessionKey, limit)
+		WITH term_hits(term_number, line_number) AS (` + termSQL + `)
+		SELECT r.line_number, r.timestamp_ms, r.role, r.phase, r.text,
+		       group_concat(DISTINCT term_hits.term_number) AS term_numbers
+		FROM term_hits
+		JOIN records r ON r.session_key = ? AND r.line_number = term_hits.line_number
+		WHERE (SELECT count(DISTINCT term_number) FROM term_hits) = ?
+		GROUP BY r.id
+		ORDER BY count(DISTINCT term_hits.term_number) DESC,
+		         CASE WHEN lower(r.role) = 'user' THEN 0 ELSE 1 END,
+		         r.line_number DESC
+		LIMIT ?`
+	args = append(args, sessionKey, len(terms), limit)
 	rows, err := s.db.QueryContext(ctx, statement, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
 
-	records := make([]Record, 0, limit)
+	records := make([]recordMatch, 0, limit)
 	for rows.Next() {
-		var record Record
-		if err := rows.Scan(&record.LineNumber, &record.TimestampMS, &record.Role, &record.Phase, &record.Text); err != nil {
+		var (
+			record      recordMatch
+			termNumbers string
+		)
+		if err := rows.Scan(
+			&record.LineNumber, &record.TimestampMS, &record.Role, &record.Phase, &record.Text,
+			&termNumbers,
+		); err != nil {
 			return nil, err
 		}
+		record.MatchedTerms = matchedSearchTerms(termNumbers, terms)
 		records = append(records, record)
 	}
 	return records, rows.Err()
+}
+
+func matchedSearchTerms(termNumbers string, terms []string) []string {
+	matched := make([]bool, len(terms))
+	for _, value := range strings.Split(termNumbers, ",") {
+		index, err := strconv.Atoi(value)
+		if err == nil && index >= 0 && index < len(matched) {
+			matched[index] = true
+		}
+	}
+	result := make([]string, 0, len(terms))
+	seen := make(map[string]struct{}, len(terms))
+	for index, term := range terms {
+		if !matched[index] {
+			continue
+		}
+		if _, ok := seen[term]; ok {
+			continue
+		}
+		seen[term] = struct{}{}
+		result = append(result, term)
+	}
+	return result
 }
 
 func scanHit(rows *sql.Rows, hit *SearchHit) error {

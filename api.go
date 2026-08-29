@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -18,9 +19,14 @@ const (
 
 type apiSearchResponse struct {
 	Query      string            `json:"query"`
+	Filters    apiSearchFilters  `json:"filters"`
 	Results    []apiSearchResult `json:"results"`
 	HasMore    bool              `json:"has_more"`
 	NextOffset *int              `json:"next_offset"`
+}
+
+type apiSearchFilters struct {
+	CWD string `json:"cwd,omitempty"`
 }
 
 type apiSearchResult struct {
@@ -38,15 +44,20 @@ type apiSearchResult struct {
 }
 
 type apiSearchMatch struct {
-	LineNumber int     `json:"line_number"`
-	Timestamp  *string `json:"timestamp"`
-	Role       string  `json:"role"`
-	Phase      string  `json:"phase"`
-	Snippet    string  `json:"snippet"`
+	LineNumber   int      `json:"line_number"`
+	Timestamp    *string  `json:"timestamp"`
+	Role         string   `json:"role"`
+	Phase        string   `json:"phase"`
+	MatchedTerms []string `json:"matched_terms"`
+	Snippet      string   `json:"snippet"`
 }
 
 func (app *webApp) apiSearch(w http.ResponseWriter, r *http.Request) {
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	cwd := strings.TrimSpace(r.URL.Query().Get("cwd"))
+	if cwd != "" {
+		cwd = filepath.Clean(cwd)
+	}
 	limit, err := apiIntegerParameter(r, "limit", apiSearchDefaultLimit, 1)
 	if err != nil {
 		writeAPIJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -58,7 +69,7 @@ func (app *webApp) apiSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hits, err := app.store.Search(r.Context(), query, limit+1, offset)
+	hits, err := app.store.search(r.Context(), query, cwd, limit+1, offset)
 	if err != nil {
 		writeAPIJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -78,11 +89,12 @@ func (app *webApp) apiSearch(w http.ResponseWriter, r *http.Request) {
 		matches := make([]apiSearchMatch, 0, len(records))
 		for _, record := range records {
 			matches = append(matches, apiSearchMatch{
-				LineNumber: record.LineNumber,
-				Timestamp:  apiTimestamp(record.TimestampMS),
-				Role:       record.Role,
-				Phase:      record.Phase,
-				Snippet:    makeSnippet(record.Text, terms, apiSearchSnippetRunes),
+				LineNumber:   record.LineNumber,
+				Timestamp:    apiTimestamp(record.TimestampMS),
+				Role:         record.Role,
+				Phase:        record.Phase,
+				MatchedTerms: record.MatchedTerms,
+				Snippet:      makeSnippet(record.Text, terms, apiSearchSnippetRunes),
 			})
 		}
 		results = append(results, apiSearchResult{
@@ -107,6 +119,7 @@ func (app *webApp) apiSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	writeAPIJSON(w, http.StatusOK, apiSearchResponse{
 		Query:      query,
+		Filters:    apiSearchFilters{CWD: cwd},
 		Results:    results,
 		HasMore:    hasMore,
 		NextOffset: nextOffset,

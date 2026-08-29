@@ -64,12 +64,17 @@ The local HTTP server provides a JSON search API for scripts and agents:
 ```console
 curl --get \
   --data-urlencode 'q=tinyenv "github actions"' \
+  --data-urlencode 'cwd=/path/to/project' \
   --data-urlencode 'limit=10' \
   http://127.0.0.1:8787/api/v1/search
 ```
 
 Results are grouped by session and include the source JSONL path, session ID,
-title, working directory, timestamps, and up to three recent matching records.
+title, working directory, timestamps, and up to three matching records. The
+optional `cwd` parameter limits results to that working directory and its
+descendants. Each matching record identifies its `matched_terms`; records that
+match more terms are returned first, followed by user messages and newer
+records.
 Codex results also include their `codex://threads/<session-id>` URL. Use
 `offset` with the returned `next_offset` to fetch another page. API searches do
 not update the web interface's search history.

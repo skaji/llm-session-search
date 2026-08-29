@@ -62,8 +62,10 @@ func TestWebHandler(t *testing.T) {
 		result.MatchCount != 2 || len(result.Matches) != 2 {
 		t.Fatalf("unexpected API result: %+v", result)
 	}
-	if result.Matches[0].LineNumber != 4 || !strings.Contains(result.Matches[0].Snippet, "visible assistant reply") ||
-		result.Matches[1].LineNumber != 1 || !strings.Contains(result.Matches[1].Snippet, "searchable web text") {
+	if result.Matches[0].LineNumber != 1 || strings.Join(result.Matches[0].MatchedTerms, " ") != "web" ||
+		!strings.Contains(result.Matches[0].Snippet, "searchable web text") ||
+		result.Matches[1].LineNumber != 4 || strings.Join(result.Matches[1].MatchedTerms, " ") != "visible" ||
+		!strings.Contains(result.Matches[1].Snippet, "visible assistant reply") {
 		t.Fatalf("unexpected API matches: %+v", result.Matches)
 	}
 	history, err := store.ListSearchHistory(context.Background(), searchHistoryLimit)
@@ -245,18 +247,19 @@ func TestSearchAPIPagination(t *testing.T) {
 	sessions := []struct {
 		id        string
 		path      string
+		cwd       string
 		updatedAt int64
 	}{
-		{id: testSessionID, path: "/tmp/newer.jsonl", updatedAt: 2_000},
-		{id: "11111111-2222-3333-4444-555555555555", path: "/tmp/older.jsonl", updatedAt: 1_000},
+		{id: testSessionID, path: "/tmp/newer.jsonl", cwd: "/work/cpm/subdir", updatedAt: 2_000},
+		{id: "11111111-2222-3333-4444-555555555555", path: "/tmp/older.jsonl", cwd: "/work/cpm-other", updatedAt: 1_000},
 	}
 	for _, session := range sessions {
 		result, err := store.db.Exec(`
 			INSERT INTO sessions(
 				source, source_id, path, archived, title, cwd, updated_at_ms,
 				size, mtime_ns, scan_generation
-			) VALUES (?, ?, ?, 0, '', '', ?, 0, 0, 'test')`,
-			sourceCodex, session.id, session.path, session.updatedAt)
+			) VALUES (?, ?, ?, 0, '', ?, ?, 0, 0, 'test')`,
+			sourceCodex, session.id, session.path, session.cwd, session.updatedAt)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -290,6 +293,68 @@ func TestSearchAPIPagination(t *testing.T) {
 	if len(secondPage.Results) != 1 || secondPage.Results[0].SessionID != sessions[1].id ||
 		secondPage.HasMore || secondPage.NextOffset != nil {
 		t.Fatalf("unexpected second page: %+v", secondPage)
+	}
+
+	response = get(t, handler, "/api/v1/search?q=pagination&cwd="+url.QueryEscape("/work/cpm/"))
+	var filtered apiSearchResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &filtered); err != nil {
+		t.Fatal(err)
+	}
+	if filtered.Filters.CWD != "/work/cpm" || len(filtered.Results) != 1 ||
+		filtered.Results[0].SessionID != sessions[0].id || filtered.HasMore {
+		t.Fatalf("unexpected cwd-filtered response: %+v", filtered)
+	}
+}
+
+func TestSearchAPIMatchOrdering(t *testing.T) {
+	t.Parallel()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "index.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	result, err := store.db.Exec(`
+		INSERT INTO sessions(
+			source, source_id, path, archived, title, cwd,
+			size, mtime_ns, scan_generation
+		) VALUES (?, ?, '/tmp/matches.jsonl', 0, '', '', 0, 0, 'test')`,
+		sourceCodex, testSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionKey, err := result.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range []struct {
+		line int
+		role string
+		text string
+	}{
+		{line: 1, role: "assistant", text: "alpha beta together"},
+		{line: 2, role: "user", text: "alpha only"},
+		{line: 3, role: "assistant", text: "beta only"},
+	} {
+		if _, err := store.db.Exec(`
+			INSERT INTO records(session_key, line_number, role, text)
+			VALUES (?, ?, ?, ?)`, sessionKey, record.line, record.role, record.text); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	response := get(t, NewWebHandler(store), "/api/v1/search?q=alpha+beta")
+	var apiResponse apiSearchResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &apiResponse); err != nil {
+		t.Fatal(err)
+	}
+	if len(apiResponse.Results) != 1 || len(apiResponse.Results[0].Matches) != 3 {
+		t.Fatalf("unexpected response: %+v", apiResponse)
+	}
+	matches := apiResponse.Results[0].Matches
+	if matches[0].LineNumber != 1 || strings.Join(matches[0].MatchedTerms, " ") != "alpha beta" ||
+		matches[1].LineNumber != 2 || strings.Join(matches[1].MatchedTerms, " ") != "alpha" ||
+		matches[2].LineNumber != 3 || strings.Join(matches[2].MatchedTerms, " ") != "beta" {
+		t.Fatalf("unexpected match order: %+v", matches)
 	}
 }
 
