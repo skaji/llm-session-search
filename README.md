@@ -47,6 +47,9 @@ Set `--index-interval 0` to disable background updates. The startup update
 always runs. The data directory stores the database as `index.db`; daemon mode
 also uses it for `app.pid` and `app.log`.
 
+Relative directory options are resolved against the startup working directory.
+The daemon then changes its working directory to `/`.
+
 To run the server in the background:
 
 ```console

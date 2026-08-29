@@ -66,9 +66,17 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	absoluteDataDir, err := filepath.Abs(*dataDir)
+	absoluteCodexHome, err := absolutePath(*codexHome)
 	if err != nil {
-		return fmt.Errorf("resolve data directory: %w", err)
+		return fmt.Errorf("resolve Codex data directory: %w", err)
+	}
+	absoluteClaudeHome, err := absolutePath(*claudeHome)
+	if err != nil {
+		return fmt.Errorf("resolve Claude Code data directory: %w", err)
+	}
+	absoluteDataDir, err := absolutePath(*dataDir)
+	if err != nil {
+		return fmt.Errorf("resolve application data directory: %w", err)
 	}
 	var daemonChild *daemonState
 	if operation != daemonOperationNone {
@@ -81,13 +89,14 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 		daemonChild = &result.state
 		defer result.state.release()
+		defer func() { _ = result.state.removeReady(os.Getpid()) }()
 	}
 	dbPath := filepath.Join(absoluteDataDir, "index.db")
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	homes := SessionHomes{Codex: *codexHome, ClaudeCode: *claudeHome}
+	homes := SessionHomes{Codex: absoluteCodexHome, ClaudeCode: absoluteClaudeHome}
 	for _, source := range homes.sources() {
 		_, _ = fmt.Fprintf(stdout, "Indexing %s sessions from %s...\n", source.name, source.home)
 	}
@@ -210,6 +219,13 @@ func defaultPaths() (paths, error) {
 		claudeHome: claudeHome,
 		dataDir:    filepath.Join(home, ".llm-session-search"),
 	}, nil
+}
+
+func absolutePath(path string) (string, error) {
+	if path == "" {
+		return "", nil
+	}
+	return filepath.Abs(path)
 }
 
 func formatSessionHomes(homes SessionHomes) string {

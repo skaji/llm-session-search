@@ -61,6 +61,49 @@ func TestRunRejectsMultipleDaemonOperations(t *testing.T) {
 	}
 }
 
+func TestAbsolutePath(t *testing.T) {
+	t.Parallel()
+
+	if got, err := absolutePath(""); err != nil || got != "" {
+		t.Fatalf("absolutePath(empty) = (%q, %v)", got, err)
+	}
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(workingDirectory, "relative", "path")
+	got, err := absolutePath(filepath.Join("relative", "path"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("absolutePath(relative) = %q, want %q", got, want)
+	}
+}
+
+func TestRunReportsAbsoluteSessionHome(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	err := run([]string{
+		"--codex-home", "missing-relative-codex-home",
+		"--claude-home=",
+		"--data-dir", filepath.Join(t.TempDir(), "data"),
+		"--index-interval", "0",
+	}, &stdout, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("run() succeeded with a missing Codex home")
+	}
+	absoluteHome, err := filepath.Abs("missing-relative-codex-home")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "Indexing Codex sessions from " + absoluteHome + "...\n"
+	if stdout.String() != want {
+		t.Fatalf("stdout = %q, want %q", stdout.String(), want)
+	}
+}
+
 func TestRunReportsInitialIndexStart(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

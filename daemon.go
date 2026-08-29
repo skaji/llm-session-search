@@ -76,6 +76,9 @@ func handleDaemonOperation(operation daemonOperation, dataDir string, stdout io.
 		if err := state.reborn(); err != nil {
 			return daemonResult{}, err
 		}
+		if err := os.Chdir("/"); err != nil {
+			return daemonResult{}, fmt.Errorf("change daemon working directory: %w", err)
+		}
 		return daemonResult{runServer: true, state: state}, nil
 	}
 
@@ -255,6 +258,7 @@ func (state daemonState) waitForProcess(timeout time.Duration) (*os.Process, boo
 }
 
 func (state daemonState) waitUntilReady(timeout time.Duration) error {
+	defer func() { _ = state.removeReady(state.child.Pid) }()
 	exited := make(chan error, 1)
 	go func() {
 		_, err := state.child.Wait()
@@ -272,8 +276,11 @@ func (state daemonState) waitUntilReady(timeout time.Duration) error {
 		default:
 		}
 
-		ready, err := daemonPIDReady(state.pidPath, state.child.Pid)
+		ready, err := daemonReady(state.readyPath(state.child.Pid), state.child.Pid)
 		if err == nil && ready {
+			if err := state.removeReady(state.child.Pid); err != nil {
+				return err
+			}
 			return nil
 		}
 		time.Sleep(25 * time.Millisecond)
@@ -282,27 +289,31 @@ func (state daemonState) waitUntilReady(timeout time.Duration) error {
 }
 
 func (state daemonState) markReady() error {
-	file, err := os.OpenFile(state.pidPath, os.O_WRONLY|os.O_APPEND, 0)
-	if err != nil {
-		return fmt.Errorf("mark daemon ready: %w", err)
-	}
-	defer func() { _ = file.Close() }()
-	if _, err := fmt.Fprintln(file, "\nready"); err != nil {
-		return fmt.Errorf("mark daemon ready: %w", err)
-	}
-	if err := file.Sync(); err != nil {
+	path := state.readyPath(os.Getpid())
+	if err := os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
 		return fmt.Errorf("mark daemon ready: %w", err)
 	}
 	return nil
 }
 
-func daemonPIDReady(path string, wantPID int) (bool, error) {
+func (state daemonState) readyPath(pid int) string {
+	return filepath.Join(filepath.Dir(state.pidPath), fmt.Sprintf(".app.ready.%d", pid))
+}
+
+func (state daemonState) removeReady(pid int) error {
+	if err := os.Remove(state.readyPath(pid)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove daemon readiness file: %w", err)
+	}
+	return nil
+}
+
+func daemonReady(path string, wantPID int) (bool, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return false, err
 	}
 	fields := strings.Fields(string(data))
-	if len(fields) != 2 || fields[1] != "ready" {
+	if len(fields) != 1 {
 		return false, nil
 	}
 	pid, err := strconv.Atoi(fields[0])

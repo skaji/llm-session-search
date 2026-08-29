@@ -145,26 +145,30 @@ func TestHandleDaemonStatus(t *testing.T) {
 	})
 }
 
-func TestDaemonPIDReady(t *testing.T) {
+func TestDaemonReady(t *testing.T) {
 	t.Parallel()
 
 	state := newDaemonState(t.TempDir())
-	if err := os.WriteFile(state.pidPath, []byte("1234"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	ready, err := daemonPIDReady(state.pidPath, 1234)
-	if err != nil || ready {
-		t.Fatalf("daemonPIDReady() before marker = (%t, %v)", ready, err)
+	readyPath := state.readyPath(os.Getpid())
+	ready, err := daemonReady(readyPath, os.Getpid())
+	if !errors.Is(err, os.ErrNotExist) || ready {
+		t.Fatalf("daemonReady() before marker = (%t, %v)", ready, err)
 	}
 	if err := state.markReady(); err != nil {
 		t.Fatal(err)
 	}
-	ready, err = daemonPIDReady(state.pidPath, 1234)
+	ready, err = daemonReady(readyPath, os.Getpid())
 	if err != nil || !ready {
-		t.Fatalf("daemonPIDReady() after marker = (%t, %v)", ready, err)
+		t.Fatalf("daemonReady() after marker = (%t, %v)", ready, err)
 	}
-	ready, err = daemonPIDReady(state.pidPath, 5678)
+	ready, err = daemonReady(readyPath, os.Getpid()+1)
 	if err != nil || ready {
-		t.Fatalf("daemonPIDReady() for another PID = (%t, %v)", ready, err)
+		t.Fatalf("daemonReady() for another PID = (%t, %v)", ready, err)
+	}
+	if err := state.removeReady(os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(readyPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("readiness file was not removed: %v", err)
 	}
 }
