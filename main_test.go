@@ -89,11 +89,12 @@ func TestOpenIndexedStoreCreatesDatabaseAndIndex(t *testing.T) {
 	}
 }
 
-func TestRunPeriodicIndexerRetriesAfterFailure(t *testing.T) {
+func TestRunPeriodicIndexerLogsFailuresAndKeepsRunning(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	logLines := make(logWriter, 4)
+	calls := make(chan int, 2)
 	logger := log.New(logLines, "", 0)
 	callCount := 0
 
@@ -101,6 +102,7 @@ func TestRunPeriodicIndexerRetriesAfterFailure(t *testing.T) {
 		defer close(done)
 		runPeriodicIndexer(ctx, time.Millisecond, logger, func(context.Context) (IndexStats, error) {
 			callCount++
+			calls <- callCount
 			if callCount == 1 {
 				return IndexStats{}, errors.New("temporary failure")
 			}
@@ -108,13 +110,10 @@ func TestRunPeriodicIndexerRetriesAfterFailure(t *testing.T) {
 		})
 	}()
 
-	var logs strings.Builder
-	deadline := time.After(time.Second)
-	for !strings.Contains(logs.String(), "Background index completed") {
+	for range 2 {
 		select {
-		case line := <-logLines:
-			logs.WriteString(line)
-		case <-deadline:
+		case <-calls:
+		case <-time.After(time.Second):
 			t.Fatal("periodic indexer did not retry")
 		}
 	}
@@ -124,10 +123,15 @@ func TestRunPeriodicIndexerRetriesAfterFailure(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("periodic indexer did not stop")
 	}
+	close(logLines)
 
+	var logs strings.Builder
+	for line := range logLines {
+		logs.WriteString(line)
+	}
 	output := logs.String()
 	if !strings.Contains(output, "Background index failed: temporary failure") ||
-		!strings.Contains(output, "Background index completed: 2 sessions (1 changed, 1 unchanged, 3 records)") {
+		strings.Contains(output, "Background index completed:") {
 		t.Fatalf("unexpected logs: %s", output)
 	}
 }

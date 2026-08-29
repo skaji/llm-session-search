@@ -136,16 +136,12 @@ func runPeriodicIndexer(ctx context.Context, interval time.Duration, logger *log
 		case <-timer.C:
 		}
 
-		started := time.Now()
-		stats, err := index(ctx)
+		_, err := index(ctx)
 		if ctx.Err() != nil {
 			return
 		}
 		if err != nil {
 			logger.Printf("Background index failed: %v", err)
-		} else {
-			logger.Printf("Background index completed: %d sessions (%d changed, %d unchanged, %d records) in %s",
-				stats.Sessions, stats.Changed, stats.Unchanged, stats.Records, time.Since(started).Round(time.Millisecond))
 		}
 		timer.Reset(interval)
 	}
