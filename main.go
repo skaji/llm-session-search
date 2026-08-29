@@ -16,6 +16,8 @@ import (
 	"time"
 )
 
+var version = "dev"
+
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, "llm-session-search:", err)
@@ -37,11 +39,16 @@ func run(args []string, stdout, stderr io.Writer) error {
 	dbPath := flags.String("db", defaults.dbPath, "SQLite index path")
 	listen := flags.String("listen", "127.0.0.1:8787", "HTTP listen address")
 	indexInterval := flags.Duration("index-interval", time.Minute, "Background index interval (0 disables it)")
+	versionFlag := flags.Bool("version", false, "show version")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
+	}
+	if *versionFlag {
+		fmt.Fprintln(stdout, version)
+		return nil
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected argument %q; subcommands are not supported", flags.Arg(0))
