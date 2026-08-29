@@ -347,7 +347,7 @@ func (s *Store) sessionMatchRecords(ctx context.Context, sessionKey int64, query
 
 func matchedSearchTerms(termNumbers string, terms []string) []string {
 	matched := make([]bool, len(terms))
-	for _, value := range strings.Split(termNumbers, ",") {
+	for value := range strings.SplitSeq(termNumbers, ",") {
 		index, err := strconv.Atoi(value)
 		if err == nil && index >= 0 && index < len(matched) {
 			matched[index] = true
