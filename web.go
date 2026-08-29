@@ -63,6 +63,7 @@ func NewWebHandler(store *Store) http.Handler {
 	mux.HandleFunc("GET /app.js", staticHandler("text/javascript; charset=utf-8", "no-cache", appJS))
 	mux.HandleFunc("GET /favicon.svg", staticHandler("image/svg+xml; charset=utf-8", "public, max-age=86400", faviconSVG))
 	mux.HandleFunc("GET /icons/openai.svg", staticHandler("image/svg+xml; charset=utf-8", "public, max-age=86400", openAIIconSVG))
+	mux.HandleFunc("GET /api/v1/search", app.apiSearch)
 	mux.HandleFunc("GET /", app.index)
 	mux.HandleFunc("GET /sessions/{source}/{id}", app.session)
 	return securityHeaders(mux)

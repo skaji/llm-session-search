@@ -239,7 +239,7 @@ func (s *Store) Search(ctx context.Context, query string, limit, offset int) ([]
 	if len(terms) == 0 {
 		return nil, nil
 	}
-	if limit <= 0 || limit > 200 {
+	if limit <= 0 {
 		limit = 50
 	}
 
@@ -282,6 +282,40 @@ func (s *Store) Search(ctx context.Context, query string, limit, offset int) ([]
 		hits = append(hits, hit)
 	}
 	return hits, rows.Err()
+}
+
+func (s *Store) sessionMatchRecords(ctx context.Context, sessionKey int64, query string, limit int) ([]Record, error) {
+	terms := parseSearchQuery(query)
+	if len(terms) == 0 || limit <= 0 {
+		return nil, nil
+	}
+	termSQL, args := termHitsSQL(terms, sessionKey)
+	statement := `
+        WITH term_hits(term_number, line_number) AS (` + termSQL + `),
+        matched_lines AS (
+            SELECT DISTINCT line_number FROM term_hits
+            WHERE (SELECT count(DISTINCT term_number) FROM term_hits) = ?
+        )
+		SELECT r.line_number, r.timestamp_ms, r.role, r.phase, r.text
+		FROM matched_lines
+		JOIN records r ON r.session_key = ? AND r.line_number = matched_lines.line_number
+		ORDER BY r.line_number DESC LIMIT ?`
+	args = append(args, len(terms), sessionKey, limit)
+	rows, err := s.db.QueryContext(ctx, statement, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	records := make([]Record, 0, limit)
+	for rows.Next() {
+		var record Record
+		if err := rows.Scan(&record.LineNumber, &record.TimestampMS, &record.Role, &record.Phase, &record.Text); err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, rows.Err()
 }
 
 func scanHit(rows *sql.Rows, hit *SearchHit) error {

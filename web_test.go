@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -44,7 +45,36 @@ func TestWebHandler(t *testing.T) {
 	}
 	handler := NewWebHandler(store)
 
-	response := get(t, handler, "/")
+	response := get(t, handler, "/api/v1/search?q="+url.QueryEscape("web visible"))
+	if contentType := response.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "application/json") {
+		t.Fatalf("API content type = %q", contentType)
+	}
+	var apiResponse apiSearchResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &apiResponse); err != nil {
+		t.Fatal(err)
+	}
+	if apiResponse.Query != "web visible" || apiResponse.HasMore || apiResponse.NextOffset != nil || len(apiResponse.Results) != 1 {
+		t.Fatalf("unexpected API response: %+v", apiResponse)
+	}
+	result := apiResponse.Results[0]
+	if result.Source != sourceCodex || result.SessionID != testSessionID || result.Path != sessionPath ||
+		result.URL == nil || *result.URL != "codex://threads/"+testSessionID || result.Title != "Web session" ||
+		result.MatchCount != 2 || len(result.Matches) != 2 {
+		t.Fatalf("unexpected API result: %+v", result)
+	}
+	if result.Matches[0].LineNumber != 4 || !strings.Contains(result.Matches[0].Snippet, "visible assistant reply") ||
+		result.Matches[1].LineNumber != 1 || !strings.Contains(result.Matches[1].Snippet, "searchable web text") {
+		t.Fatalf("unexpected API matches: %+v", result.Matches)
+	}
+	history, err := store.ListSearchHistory(context.Background(), searchHistoryLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 0 {
+		t.Fatalf("API search updated web search history: %v", history)
+	}
+
+	response = get(t, handler, "/")
 	if !strings.Contains(response.Body.String(), `data-copy-text="`+sessionPath+`"`) ||
 		!strings.Contains(response.Body.String(), `<link rel="icon" href="/favicon.svg" type="image/svg+xml">`) ||
 		!strings.Contains(response.Body.String(), "Search local Codex and Claude Code sessions.") ||
@@ -165,6 +195,101 @@ func TestWebHandler(t *testing.T) {
 	response = get(t, handler, "/icons/openai.svg")
 	if !strings.Contains(response.Body.String(), "<svg") || !strings.Contains(response.Body.String(), `fill="black"`) {
 		t.Fatalf("unexpected OpenAI icon: %s", response.Body.String())
+	}
+}
+
+func TestSearchAPIParameters(t *testing.T) {
+	t.Parallel()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "index.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	handler := NewWebHandler(store)
+
+	response := get(t, handler, "/api/v1/search")
+	var apiResponse apiSearchResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &apiResponse); err != nil {
+		t.Fatal(err)
+	}
+	if apiResponse.Query != "" || apiResponse.Results == nil || len(apiResponse.Results) != 0 {
+		t.Fatalf("unexpected empty search response: %+v", apiResponse)
+	}
+
+	for _, target := range []string{
+		"/api/v1/search?limit=0",
+		"/api/v1/search?limit=invalid",
+		"/api/v1/search?offset=-1",
+	} {
+		request := httptest.NewRequest(http.MethodGet, target, nil)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest || !strings.HasPrefix(response.Header().Get("Content-Type"), "application/json") {
+			t.Fatalf("GET %s: status=%d content-type=%q body=%s", target, response.Code, response.Header().Get("Content-Type"), response.Body.String())
+		}
+		var apiError map[string]string
+		if err := json.Unmarshal(response.Body.Bytes(), &apiError); err != nil || apiError["error"] == "" {
+			t.Fatalf("GET %s: error=%v response=%v", target, err, apiError)
+		}
+	}
+}
+
+func TestSearchAPIPagination(t *testing.T) {
+	t.Parallel()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "index.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	sessions := []struct {
+		id        string
+		path      string
+		updatedAt int64
+	}{
+		{id: testSessionID, path: "/tmp/newer.jsonl", updatedAt: 2_000},
+		{id: "11111111-2222-3333-4444-555555555555", path: "/tmp/older.jsonl", updatedAt: 1_000},
+	}
+	for _, session := range sessions {
+		result, err := store.db.Exec(`
+			INSERT INTO sessions(
+				source, source_id, path, archived, title, cwd, updated_at_ms,
+				size, mtime_ns, scan_generation
+			) VALUES (?, ?, ?, 0, '', '', ?, 0, 0, 'test')`,
+			sourceCodex, session.id, session.path, session.updatedAt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sessionKey, err := result.LastInsertId()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.db.Exec(`
+			INSERT INTO records(session_key, line_number, role, text)
+			VALUES (?, 1, 'user', 'pagination match')`, sessionKey); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	handler := NewWebHandler(store)
+	response := get(t, handler, "/api/v1/search?q=pagination&limit=1")
+	var firstPage apiSearchResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &firstPage); err != nil {
+		t.Fatal(err)
+	}
+	if len(firstPage.Results) != 1 || firstPage.Results[0].SessionID != sessions[0].id ||
+		!firstPage.HasMore || firstPage.NextOffset == nil || *firstPage.NextOffset != 1 {
+		t.Fatalf("unexpected first page: %+v", firstPage)
+	}
+
+	response = get(t, handler, "/api/v1/search?q=pagination&limit=1&offset=1")
+	var secondPage apiSearchResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &secondPage); err != nil {
+		t.Fatal(err)
+	}
+	if len(secondPage.Results) != 1 || secondPage.Results[0].SessionID != sessions[1].id ||
+		secondPage.HasMore || secondPage.NextOffset != nil {
+		t.Fatalf("unexpected second page: %+v", secondPage)
 	}
 }
 

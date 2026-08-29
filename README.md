@@ -57,6 +57,23 @@ Typing triggers a search after 500 milliseconds when all terms are at least
 three characters. Whitespace, a closing quote, Enter, or the Search button runs
 it immediately. Search terms are highlighted in result and session pages.
 
+## Search API
+
+The local HTTP server provides a JSON search API for scripts and agents:
+
+```console
+curl --get \
+  --data-urlencode 'q=tinyenv "github actions"' \
+  --data-urlencode 'limit=10' \
+  http://127.0.0.1:8787/api/v1/search
+```
+
+Results are grouped by session and include the source JSONL path, session ID,
+title, working directory, timestamps, and up to three recent matching records.
+Codex results also include their `codex://threads/<session-id>` URL. Use
+`offset` with the returned `next_offset` to fetch another page. API searches do
+not update the web interface's search history.
+
 The left pane stores the 50 most recent distinct global queries. Session pages
 show their Codex or Claude Code source alongside role and phase badges and can
 copy the current JSONL path. Codex sessions also provide a
