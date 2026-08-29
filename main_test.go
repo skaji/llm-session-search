@@ -42,13 +42,14 @@ func TestRunReportsInitialIndexStart(t *testing.T) {
 
 	err := run([]string{
 		"--codex-home", codexHome,
+		"--claude-home=",
 		"--db", dbPath,
 		"--index-interval", "0",
 	}, &stdout, &bytes.Buffer{})
 	if err == nil {
 		t.Fatal("run() succeeded with a missing Codex home")
 	}
-	want := "Indexing sessions from " + codexHome + "...\n"
+	want := "Indexing Codex sessions from " + codexHome + "...\n"
 	if stdout.String() != want {
 		t.Fatalf("stdout = %q, want %q", stdout.String(), want)
 	}
@@ -68,7 +69,7 @@ func TestOpenIndexedStoreCreatesDatabaseAndIndex(t *testing.T) {
 	}
 	dbPath := filepath.Join(root, "new-data", "index.db")
 
-	store, stats, err := openIndexedStore(context.Background(), codexHome, dbPath, false)
+	store, stats, err := openIndexedStore(context.Background(), SessionHomes{Codex: codexHome}, dbPath, false)
 	if err != nil {
 		t.Fatal(err)
 	}

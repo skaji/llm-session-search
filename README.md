@@ -1,8 +1,9 @@
 # llm-session-search
 
-`llm-session-search` indexes user and assistant messages from local Codex JSONL
-sessions and provides a web interface for finding previous conversations. Its
-best-effort parser supports multiple session schema generations.
+`llm-session-search` indexes user and assistant messages from local Codex and
+Claude Code JSONL sessions and provides a web interface for finding previous
+conversations. Its best-effort parsers support multiple session schema
+generations.
 
 ## Build and run
 
@@ -17,14 +18,24 @@ updates `~/.llm-session-search/index.db` from:
 - `~/.codex/sessions/**/*.jsonl`
 - `~/.codex/archived_sessions/**/*.jsonl`
 
+and from main Claude Code transcripts under:
+
+- `${CLAUDE_CONFIG_DIR:-~/.claude}/projects/*/*.jsonl`
+
 It then updates the index every minute. Unchanged files are skipped, append-only
 updates resume from the previous offset, and source files are never modified.
+Claude Code subagent transcripts are not indexed.
+
+The index database has no schema migration support. After an update that changes
+the schema or indexed content, stop the process, delete `index.db`, and restart
+the application to rebuild it from the session files.
 
 Available options:
 
 ```console
 ./llm-session-search \
   --codex-home /path/to/.codex \
+  --claude-home /path/to/.claude \
   --db /path/to/index.db \
   --listen 127.0.0.1:9000 \
   --index-interval 1m
@@ -45,15 +56,16 @@ three characters. Whitespace, a closing quote, Enter, or the Search button runs
 it immediately. Search terms are highlighted in result and session pages.
 
 The left pane stores the 50 most recent distinct global queries. Session pages
-show role and phase badges, provide a `codex://threads/<session-id>` link, and
-can copy the current JSONL path. System, developer, tool, and other internal
-records are neither indexed nor displayed. Encrypted content, base64 data URLs,
-and automatically injected AGENTS.md, plugin, and environment context are also
-excluded.
+show their Codex or Claude Code source alongside role and phase badges and can
+copy the current JSONL path. Codex sessions also provide a
+`codex://threads/<session-id>` link. System, developer, tool, thinking, and
+other internal records are neither indexed nor displayed. Encrypted content,
+base64 data URLs, automatically injected AGENTS.md, plugin, environment context,
+Claude Code system reminders, and local commands are also excluded.
 
 ## Privacy
 
 The web server listens on `127.0.0.1` by default and uses no external assets.
 The data directory is created with mode `0700`, and the SQLite database uses
-mode `0600`. The database still contains extracted text from local sessions and
-should be treated as sensitive.
+mode `0600`. The database still contains extracted text from local Codex and
+Claude Code sessions and should be treated as sensitive.

@@ -18,8 +18,15 @@ PRAGMA synchronous = NORMAL;
 PRAGMA busy_timeout = 5000;
 PRAGMA foreign_keys = ON;
 
+CREATE TABLE IF NOT EXISTS search_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    query TEXT NOT NULL UNIQUE
+);
+
 CREATE TABLE IF NOT EXISTS sessions (
-    id TEXT PRIMARY KEY,
+    key INTEGER PRIMARY KEY,
+    source TEXT NOT NULL,
+    source_id TEXT NOT NULL,
     path TEXT NOT NULL,
     archived INTEGER NOT NULL,
     title TEXT NOT NULL DEFAULT '',
@@ -29,17 +36,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     size INTEGER NOT NULL,
     mtime_ns INTEGER NOT NULL,
     line_count INTEGER NOT NULL DEFAULT 0,
-    scan_generation TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS app_meta (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS search_history (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    query TEXT NOT NULL UNIQUE
+    scan_generation TEXT NOT NULL,
+    UNIQUE(source, source_id)
 );
 
 CREATE INDEX IF NOT EXISTS sessions_updated_at_idx
@@ -47,17 +45,17 @@ CREATE INDEX IF NOT EXISTS sessions_updated_at_idx
 
 CREATE TABLE IF NOT EXISTS records (
 	id INTEGER PRIMARY KEY,
-	session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+	session_key INTEGER NOT NULL REFERENCES sessions(key) ON DELETE CASCADE,
 	line_number INTEGER NOT NULL,
 	timestamp_ms INTEGER,
 	role TEXT NOT NULL DEFAULT '',
 	phase TEXT NOT NULL DEFAULT '',
 	text TEXT NOT NULL,
-    UNIQUE(session_id, line_number)
+    UNIQUE(session_key, line_number)
 );
 
 CREATE INDEX IF NOT EXISTS records_session_idx
-    ON records(session_id, line_number);
+    ON records(session_key, line_number);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS records_fts USING fts5(
     text,
@@ -96,14 +94,6 @@ func OpenStore(path string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("initialize database: %w", err)
 	}
-	if err := rebuildRecordsTable(db); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("migrate database: %w", err)
-	}
-	if err := ensureSessionLineCountColumn(db); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("migrate database: %w", err)
-	}
 	if err := os.Chmod(path, 0o600); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("set database permissions: %w", err)
@@ -111,44 +101,13 @@ func OpenStore(path string) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
-func ensureSessionLineCountColumn(db *sql.DB) error {
-	var exists int
-	if err := db.QueryRow(`
-		SELECT count(*) FROM pragma_table_info('sessions') WHERE name = 'line_count'`).Scan(&exists); err != nil {
-		return err
-	}
-	if exists != 0 {
-		return nil
-	}
-	_, err := db.Exec(`ALTER TABLE sessions ADD COLUMN line_count INTEGER NOT NULL DEFAULT 0`)
-	return err
-}
-
-func rebuildRecordsTable(db *sql.DB) error {
-	var exists int
-	if err := db.QueryRow(`
-		SELECT count(*) FROM pragma_table_info('records')
-		WHERE name IN ('byte_offset', 'kind')`).Scan(&exists); err != nil {
-		return err
-	}
-	if exists == 0 {
-		return nil
-	}
-	if _, err := db.Exec(`
-		DROP TABLE records_fts;
-		DROP TABLE records;
-		DELETE FROM app_meta WHERE key = 'index_version'`); err != nil {
-		return err
-	}
-	_, err := db.Exec(schema)
-	return err
-}
-
 func (s *Store) Close() error {
 	return s.db.Close()
 }
 
 type Session struct {
+	Key         int64
+	Source      string
 	ID          string
 	Path        string
 	Archived    bool
@@ -175,6 +134,7 @@ type SearchHit struct {
 }
 
 type sessionIndexState struct {
+	key         int64
 	path        string
 	size        int64
 	mtimeNS     int64
@@ -182,18 +142,19 @@ type sessionIndexState struct {
 	startedAtMS sql.NullInt64
 	updatedAtMS sql.NullInt64
 	lastLine    int
+	title       string
 	found       bool
 }
 
-func (s *Store) sessionIndexState(ctx context.Context, id string) (sessionIndexState, error) {
+func (s *Store) sessionIndexState(ctx context.Context, source, id string) (sessionIndexState, error) {
 	var state sessionIndexState
 	err := s.db.QueryRowContext(ctx, `
-        SELECT s.path, s.size, s.mtime_ns, s.cwd, s.started_at_ms, s.updated_at_ms,
-		       s.line_count
+		SELECT s.key, s.path, s.size, s.mtime_ns, s.cwd, s.started_at_ms, s.updated_at_ms,
+		       s.line_count, s.title
 		FROM sessions s
-		WHERE s.id = ?`, id).Scan(
-		&state.path, &state.size, &state.mtimeNS, &state.cwd,
-		&state.startedAtMS, &state.updatedAtMS, &state.lastLine,
+		WHERE s.source = ? AND s.source_id = ?`, source, id).Scan(
+		&state.key, &state.path, &state.size, &state.mtimeNS, &state.cwd,
+		&state.startedAtMS, &state.updatedAtMS, &state.lastLine, &state.title,
 	)
 	if err == sql.ErrNoRows {
 		return sessionIndexState{}, nil
@@ -205,35 +166,14 @@ func (s *Store) sessionIndexState(ctx context.Context, id string) (sessionIndexS
 	return state, nil
 }
 
-func (s *Store) indexVersion(ctx context.Context) (string, error) {
-	var value string
-	err := s.db.QueryRowContext(ctx, `SELECT value FROM app_meta WHERE key = 'index_version'`).Scan(&value)
-	if err == sql.ErrNoRows {
-		return "", nil
+func (s *Store) markSessionSeen(ctx context.Context, key int64, path string, archived bool, title string, titleKnown bool, generation string) error {
+	statement := `UPDATE sessions SET path = ?, archived = ?, scan_generation = ? WHERE key = ?`
+	args := []any{path, archived, generation, key}
+	if titleKnown {
+		statement = `UPDATE sessions SET path = ?, archived = ?, title = ?, scan_generation = ? WHERE key = ?`
+		args = []any{path, archived, title, generation, key}
 	}
-	return value, err
-}
-
-func (s *Store) setIndexVersion(ctx context.Context, version string) error {
-	_, err := s.db.ExecContext(ctx, `
-        INSERT INTO app_meta(key, value) VALUES ('index_version', ?)
-        ON CONFLICT(key) DO UPDATE SET value = excluded.value`, version)
-	return err
-}
-
-func (s *Store) compactIndex(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO records_fts(records_fts) VALUES ('optimize')`); err != nil {
-		return err
-	}
-	_, err := s.db.ExecContext(ctx, `VACUUM`)
-	return err
-}
-
-func (s *Store) markSessionSeen(ctx context.Context, id, path string, archived bool, title, generation string) error {
-	_, err := s.db.ExecContext(ctx, `
-        UPDATE sessions
-        SET path = ?, archived = ?, title = ?, scan_generation = ?
-        WHERE id = ?`, path, archived, title, generation, id)
+	_, err := s.db.ExecContext(ctx, statement, args...)
 	return err
 }
 
@@ -303,25 +243,25 @@ func (s *Store) Search(ctx context.Context, query string, limit, offset int) ([]
 		limit = 50
 	}
 
-	termSQL, args := termHitsSQL(terms, "")
+	termSQL, args := termHitsSQL(terms, 0)
 	statement := `
-        WITH term_hits(term_number, session_id, line_number) AS (` + termSQL + `),
+		WITH term_hits(term_number, session_key, line_number) AS (` + termSQL + `),
 		matches AS (
-			SELECT session_id, max(line_number) AS line_number,
+			SELECT session_key, max(line_number) AS line_number,
 			       count(DISTINCT line_number) AS match_count
 			FROM term_hits
-			GROUP BY session_id
+			GROUP BY session_key
 			HAVING count(DISTINCT term_number) = ?
-        )
-        SELECT s.id, s.path, s.archived, s.title, s.cwd,
-               s.started_at_ms, s.updated_at_ms, s.size,
-               r.line_number, r.timestamp_ms, r.role, r.phase, r.text,
-               matches.match_count
-        FROM matches
-        JOIN records r
-          ON r.session_id = matches.session_id
-         AND r.line_number = matches.line_number
-        JOIN sessions s ON s.id = r.session_id
+		)
+		SELECT s.key, s.source, s.source_id, s.path, s.archived, s.title, s.cwd,
+		       s.started_at_ms, s.updated_at_ms, s.size,
+		       r.line_number, r.timestamp_ms, r.role, r.phase, r.text,
+		       matches.match_count
+		FROM matches
+		JOIN records r
+		  ON r.session_key = matches.session_key
+		 AND r.line_number = matches.line_number
+		JOIN sessions s ON s.key = r.session_key
         ORDER BY coalesce(s.updated_at_ms, 0) DESC,
                  coalesce(r.timestamp_ms, 0) DESC
         LIMIT ? OFFSET ?`
@@ -347,7 +287,7 @@ func (s *Store) Search(ctx context.Context, query string, limit, offset int) ([]
 func scanHit(rows *sql.Rows, hit *SearchHit) error {
 	var archived int
 	err := rows.Scan(
-		&hit.ID, &hit.Path, &archived, &hit.Title, &hit.CWD,
+		&hit.Key, &hit.Source, &hit.ID, &hit.Path, &archived, &hit.Title, &hit.CWD,
 		&hit.StartedAtMS, &hit.UpdatedAtMS, &hit.Size,
 		&hit.LineNumber, &hit.TimestampMS, &hit.Role, &hit.Phase, &hit.Text,
 		&hit.MatchCount,
@@ -358,8 +298,8 @@ func scanHit(rows *sql.Rows, hit *SearchHit) error {
 
 func (s *Store) ListSessions(ctx context.Context, limit int) ([]Session, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, path, archived, title, cwd, started_at_ms, updated_at_ms, size
-        FROM sessions
+		SELECT key, source, source_id, path, archived, title, cwd, started_at_ms, updated_at_ms, size
+		FROM sessions
         ORDER BY coalesce(updated_at_ms, 0) DESC
         LIMIT ?`, limit)
 	if err != nil {
@@ -371,7 +311,7 @@ func (s *Store) ListSessions(ctx context.Context, limit int) ([]Session, error) 
 	for rows.Next() {
 		var session Session
 		var archived int
-		if err := rows.Scan(&session.ID, &session.Path, &archived, &session.Title, &session.CWD,
+		if err := rows.Scan(&session.Key, &session.Source, &session.ID, &session.Path, &archived, &session.Title, &session.CWD,
 			&session.StartedAtMS, &session.UpdatedAtMS, &session.Size); err != nil {
 			return nil, err
 		}
@@ -381,20 +321,20 @@ func (s *Store) ListSessions(ctx context.Context, limit int) ([]Session, error) 
 	return sessions, rows.Err()
 }
 
-func (s *Store) GetSession(ctx context.Context, id string) (Session, error) {
+func (s *Store) GetSession(ctx context.Context, source, id string) (Session, error) {
 	var session Session
 	var archived int
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, path, archived, title, cwd, started_at_ms, updated_at_ms, size
-        FROM sessions WHERE id = ?`, id).Scan(
-		&session.ID, &session.Path, &archived, &session.Title, &session.CWD,
+		SELECT key, source, source_id, path, archived, title, cwd, started_at_ms, updated_at_ms, size
+		FROM sessions WHERE source = ? AND source_id = ?`, source, id).Scan(
+		&session.Key, &session.Source, &session.ID, &session.Path, &archived, &session.Title, &session.CWD,
 		&session.StartedAtMS, &session.UpdatedAtMS, &session.Size,
 	)
 	session.Archived = archived != 0
 	return session, err
 }
 
-func (s *Store) SessionRecords(ctx context.Context, sessionID, query string, limit int) ([]Record, error) {
+func (s *Store) SessionRecords(ctx context.Context, sessionKey int64, query string, limit int) ([]Record, error) {
 	terms := parseSearchQuery(query)
 	var (
 		rows *sql.Rows
@@ -403,11 +343,11 @@ func (s *Store) SessionRecords(ctx context.Context, sessionID, query string, lim
 	if len(terms) == 0 {
 		rows, err = s.db.QueryContext(ctx, `
 			SELECT line_number, timestamp_ms, role, phase, text
-            FROM records
-			WHERE session_id = ?
-            ORDER BY line_number LIMIT ?`, sessionID, limit)
+			FROM records
+			WHERE session_key = ?
+			ORDER BY line_number LIMIT ?`, sessionKey, limit)
 	} else {
-		termSQL, args := termHitsSQL(terms, sessionID)
+		termSQL, args := termHitsSQL(terms, sessionKey)
 		statement := `
             WITH term_hits(term_number, line_number) AS (` + termSQL + `),
             matched_lines AS (
@@ -415,10 +355,10 @@ func (s *Store) SessionRecords(ctx context.Context, sessionID, query string, lim
                 WHERE (SELECT count(DISTINCT term_number) FROM term_hits) = ?
             )
 			SELECT r.line_number, r.timestamp_ms, r.role, r.phase, r.text
-            FROM matched_lines
-            JOIN records r ON r.session_id = ? AND r.line_number = matched_lines.line_number
-            ORDER BY r.line_number LIMIT ?`
-		args = append(args, len(terms), sessionID, limit)
+			FROM matched_lines
+			JOIN records r ON r.session_key = ? AND r.line_number = matched_lines.line_number
+			ORDER BY r.line_number LIMIT ?`
+		args = append(args, len(terms), sessionKey, limit)
 		rows, err = s.db.QueryContext(ctx, statement, args...)
 	}
 	if err != nil {
@@ -438,19 +378,19 @@ func (s *Store) SessionRecords(ctx context.Context, sessionID, query string, lim
 	return records, rows.Err()
 }
 
-func termHitsSQL(terms []string, sessionID string) (string, []any) {
+func termHitsSQL(terms []string, sessionKey int64) (string, []any) {
 	parts := make([]string, 0, len(terms))
 	args := make([]any, 0, len(terms)*3)
-	columns := "r.session_id, r.line_number"
+	columns := "r.session_key, r.line_number"
 	scope := ""
-	if sessionID != "" {
+	if sessionKey != 0 {
 		columns = "r.line_number"
-		scope = "r.session_id = ? AND "
+		scope = "r.session_key = ? AND "
 	}
 	for index, term := range terms {
 		args = append(args, index)
-		if sessionID != "" {
-			args = append(args, sessionID)
+		if sessionKey != 0 {
+			args = append(args, sessionKey)
 		}
 		if utf8.RuneCountInString(term) >= 3 {
 			parts = append(parts, fmt.Sprintf(`

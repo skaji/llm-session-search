@@ -16,22 +16,52 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 )
 
-var (
-	uuidPattern     = regexp.MustCompile(`(?i)([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})`)
-	filenamePattern = regexp.MustCompile(`rollout-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})-`)
-)
+var uuidPattern = regexp.MustCompile(`(?i)([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})`)
 
 const (
 	maxIndexedStringBytes = 2 << 20
-	currentIndexVersion   = "7"
+	sourceCodex           = "codex"
+	sourceClaudeCode      = "claude-code"
 )
+
+type SessionHomes struct {
+	Codex      string
+	ClaudeCode string
+}
+
+type sessionSource struct {
+	id   string
+	name string
+	home string
+}
+
+func (homes SessionHomes) sources() []sessionSource {
+	var sources []sessionSource
+	if homes.Codex != "" {
+		sources = append(sources, sessionSource{id: sourceCodex, name: "Codex", home: homes.Codex})
+	}
+	if homes.ClaudeCode != "" {
+		sources = append(sources, sessionSource{id: sourceClaudeCode, name: "Claude Code", home: homes.ClaudeCode})
+	}
+	return sources
+}
+
+func (source sessionSource) discover() ([]sessionFile, bool, error) {
+	switch source.id {
+	case sourceCodex:
+		return discoverCodexSessionFiles(source.home)
+	case sourceClaudeCode:
+		return discoverClaudeSessionFiles(source.home)
+	default:
+		return nil, false, fmt.Errorf("unsupported session source %q", source.id)
+	}
+}
 
 type IndexStats struct {
 	Sessions  int
@@ -41,10 +71,13 @@ type IndexStats struct {
 }
 
 type sessionFile struct {
-	path     string
-	archived bool
-	id       string
-	info     fs.FileInfo
+	source     string
+	path       string
+	archived   bool
+	id         string
+	title      string
+	titleKnown bool
+	info       fs.FileInfo
 }
 
 type extractedLine struct {
@@ -53,6 +86,8 @@ type extractedLine struct {
 	phase      string
 	cwd        string
 	timestamps []time.Time
+	title      string
+	forceTitle bool
 }
 
 type sessionScan struct {
@@ -62,33 +97,25 @@ type sessionScan struct {
 	cwd        string
 	startedAt  time.Time
 	updatedAt  time.Time
+	title      string
 }
 
-func IndexSessions(ctx context.Context, store *Store, codexHome string) (IndexStats, error) {
-	files, err := discoverSessionFiles(codexHome)
+func IndexSessions(ctx context.Context, store *Store, homes SessionHomes) (IndexStats, error) {
+	files, err := discoverSessionFiles(homes)
 	if err != nil {
 		return IndexStats{}, err
 	}
-	titles := loadSessionTitles(filepath.Join(codexHome, "session_index.jsonl"))
 	generation := strconv.FormatInt(time.Now().UnixNano(), 10)
 	stats := IndexStats{Sessions: len(files)}
-	version, err := store.indexVersion(ctx)
-	if err != nil {
-		return stats, err
-	}
-	forceReindex := version != currentIndexVersion
 
 	for _, file := range files {
-		state := sessionIndexState{}
-		if !forceReindex {
-			state, err = store.sessionIndexState(ctx, file.id)
-			if err != nil {
-				return stats, err
-			}
+		state, err := store.sessionIndexState(ctx, file.source, file.id)
+		if err != nil {
+			return stats, err
 		}
 		current := state.found && state.path == file.path && state.size == file.info.Size() && state.mtimeNS == file.info.ModTime().UnixNano()
 		if current {
-			if err := store.markSessionSeen(ctx, file.id, file.path, file.archived, titles[file.id], generation); err != nil {
+			if err := store.markSessionSeen(ctx, state.key, file.path, file.archived, file.title, file.titleKnown, generation); err != nil {
 				return stats, err
 			}
 			stats.Unchanged++
@@ -97,9 +124,9 @@ func IndexSessions(ctx context.Context, store *Store, codexHome string) (IndexSt
 
 		var records int
 		if state.found && state.path == file.path && file.info.Size() > state.size {
-			records, err = appendSessionFile(ctx, store, file, titles[file.id], generation, state)
+			records, err = appendSessionFile(ctx, store, file, generation, state)
 		} else {
-			records, err = indexSessionFile(ctx, store, file, titles[file.id], generation)
+			records, err = indexSessionFile(ctx, store, file, generation)
 		}
 		if err != nil {
 			return stats, fmt.Errorf("index %s: %w", file.path, err)
@@ -110,59 +137,29 @@ func IndexSessions(ctx context.Context, store *Store, codexHome string) (IndexSt
 	if err := store.removeStaleSessions(ctx, generation); err != nil {
 		return stats, fmt.Errorf("remove stale sessions: %w", err)
 	}
-	if forceReindex {
-		if err := store.compactIndex(ctx); err != nil {
-			return stats, fmt.Errorf("compact rebuilt index: %w", err)
-		}
-	}
-	if err := store.setIndexVersion(ctx, currentIndexVersion); err != nil {
-		return stats, fmt.Errorf("record index version: %w", err)
-	}
 	return stats, nil
 }
 
-func discoverSessionFiles(codexHome string) ([]sessionFile, error) {
+func discoverSessionFiles(homes SessionHomes) ([]sessionFile, error) {
 	var files []sessionFile
-	rootCount := 0
-	for _, root := range []struct {
-		name     string
-		archived bool
-	}{
-		{name: "sessions"},
-		{name: "archived_sessions", archived: true},
-	} {
-		dir := filepath.Join(codexHome, root.name)
-		err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
-			}
-			if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".jsonl") {
-				return nil
-			}
-			info, err := entry.Info()
-			if err != nil {
-				return err
-			}
-			files = append(files, sessionFile{
-				path:     path,
-				archived: root.archived,
-				id:       sessionIDFromPath(path),
-				info:     info,
-			})
-			return nil
-		})
+	foundSource := false
+	for _, source := range homes.sources() {
+		discovered, found, err := source.discover()
 		if err != nil {
-			if errors.Is(err, fs.ErrNotExist) {
-				continue
-			}
-			return nil, fmt.Errorf("scan %s: %w", dir, err)
+			return nil, err
 		}
-		rootCount++
+		files = append(files, discovered...)
+		foundSource = foundSource || found
 	}
-	if rootCount == 0 {
-		return nil, fmt.Errorf("no session directories found under %s", codexHome)
+	if !foundSource {
+		return nil, errors.New("no Codex or Claude Code session directories found")
 	}
-	sort.Slice(files, func(i, j int) bool { return files[i].path < files[j].path })
+	slices.SortFunc(files, func(a, b sessionFile) int {
+		if bySource := strings.Compare(a.source, b.source); bySource != 0 {
+			return bySource
+		}
+		return strings.Compare(a.path, b.path)
+	})
 	return files, nil
 }
 
@@ -174,7 +171,7 @@ func sessionIDFromPath(path string) string {
 	return "file-" + hex.EncodeToString(sum[:12])
 }
 
-func indexSessionFile(ctx context.Context, store *Store, file sessionFile, title, generation string) (int, error) {
+func indexSessionFile(ctx context.Context, store *Store, file sessionFile, generation string) (int, error) {
 	handle, err := os.Open(file.path)
 	if err != nil {
 		return 0, err
@@ -187,36 +184,38 @@ func indexSessionFile(ctx context.Context, store *Store, file sessionFile, title
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.ExecContext(ctx, `
+	var sessionKey int64
+	if err := tx.QueryRowContext(ctx, `
         INSERT INTO sessions(
-            id, path, archived, title, cwd, started_at_ms, updated_at_ms,
+            source, source_id, path, archived, title, cwd, started_at_ms, updated_at_ms,
             size, mtime_ns, scan_generation
-        ) VALUES (?, ?, ?, ?, '', NULL, NULL, 0, 0, ?)
-        ON CONFLICT(id) DO UPDATE SET
+        ) VALUES (?, ?, ?, ?, ?, '', NULL, NULL, 0, 0, ?)
+        ON CONFLICT(source, source_id) DO UPDATE SET
             path = excluded.path,
             archived = excluded.archived,
             title = excluded.title,
-            scan_generation = excluded.scan_generation`,
-		file.id, file.path, file.archived, title, generation); err != nil {
+			scan_generation = excluded.scan_generation
+		RETURNING key`,
+		file.source, file.id, file.path, file.archived, file.title, generation).Scan(&sessionKey); err != nil {
 		return 0, err
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM records WHERE session_id = ?`, file.id); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM records WHERE session_key = ?`, sessionKey); err != nil {
 		return 0, err
 	}
 	insert, err := tx.PrepareContext(ctx, `
         INSERT INTO records(
-			session_id, line_number, timestamp_ms, role, phase, text
+			session_key, line_number, timestamp_ms, role, phase, text
 		) VALUES (?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return 0, err
 	}
 	defer func() { _ = insert.Close() }()
 
-	scan := sessionScan{}
+	scan := sessionScan{title: file.title}
 	if timestamp, ok := timestampFromFilename(file.path); ok {
 		scan.startedAt = timestamp
 	}
-	scan, err = scanSessionLines(ctx, handle, insert, file.id, scan)
+	scan, err = scanSessionLines(ctx, handle, insert, sessionKey, file.source, scan)
 	if err != nil {
 		return 0, err
 	}
@@ -230,11 +229,11 @@ func indexSessionFile(ctx context.Context, store *Store, file sessionFile, title
 	}
 	if _, err := tx.ExecContext(ctx, `
         UPDATE sessions
-		SET cwd = ?, started_at_ms = ?, updated_at_ms = ?, size = ?, mtime_ns = ?,
+		SET title = ?, cwd = ?, started_at_ms = ?, updated_at_ms = ?, size = ?, mtime_ns = ?,
 		    line_count = ?
-		WHERE id = ?`, scan.cwd, nullableUnixMilli(scan.startedAt), nullableUnixMilli(scan.updatedAt),
+		WHERE key = ?`, scan.title, scan.cwd, nullableUnixMilli(scan.startedAt), nullableUnixMilli(scan.updatedAt),
 		scan.offset, afterInfo.ModTime().UnixNano(),
-		scan.lineNumber, file.id); err != nil {
+		scan.lineNumber, sessionKey); err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -247,7 +246,7 @@ func appendSessionFile(
 	ctx context.Context,
 	store *Store,
 	file sessionFile,
-	title, generation string,
+	generation string,
 	state sessionIndexState,
 ) (int, error) {
 	handle, err := os.Open(file.path)
@@ -266,21 +265,21 @@ func appendSessionFile(
 	defer func() { _ = tx.Rollback() }()
 	insert, err := tx.PrepareContext(ctx, `
         INSERT INTO records(
-			session_id, line_number, timestamp_ms, role, phase, text
+			session_key, line_number, timestamp_ms, role, phase, text
 		) VALUES (?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return 0, err
 	}
 	defer func() { _ = insert.Close() }()
 
-	scan := sessionScan{offset: state.size, lineNumber: state.lastLine, cwd: state.cwd}
+	scan := sessionScan{offset: state.size, lineNumber: state.lastLine, cwd: state.cwd, title: state.title}
 	if state.startedAtMS.Valid {
 		scan.startedAt = time.UnixMilli(state.startedAtMS.Int64)
 	}
 	if state.updatedAtMS.Valid {
 		scan.updatedAt = time.UnixMilli(state.updatedAtMS.Int64)
 	}
-	scan, err = scanSessionLines(ctx, handle, insert, file.id, scan)
+	scan, err = scanSessionLines(ctx, handle, insert, state.key, file.source, scan)
 	if err != nil {
 		return 0, err
 	}
@@ -294,9 +293,9 @@ func appendSessionFile(
 		SET path = ?, archived = ?, title = ?, cwd = ?,
 		    started_at_ms = ?, updated_at_ms = ?, size = ?, mtime_ns = ?, line_count = ?,
             scan_generation = ?
-		WHERE id = ?`, file.path, file.archived, title, scan.cwd,
+		WHERE key = ?`, file.path, file.archived, scan.title, scan.cwd,
 		nullableUnixMilli(scan.startedAt), nullableUnixMilli(scan.updatedAt), scan.offset,
-		afterInfo.ModTime().UnixNano(), scan.lineNumber, generation, file.id); err != nil {
+		afterInfo.ModTime().UnixNano(), scan.lineNumber, generation, state.key); err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -309,7 +308,8 @@ func scanSessionLines(
 	ctx context.Context,
 	reader io.Reader,
 	insert *sql.Stmt,
-	sessionID string,
+	sessionKey int64,
+	source string,
 	scan sessionScan,
 ) (sessionScan, error) {
 	buffer := bufio.NewReaderSize(reader, 256*1024)
@@ -324,9 +324,12 @@ func scanSessionLines(
 		}
 		if len(line) > 0 {
 			scan.lineNumber++
-			extracted := extractJSONLine(line)
+			extracted := extractSessionLine(source, line)
 			if scan.cwd == "" && extracted.cwd != "" {
 				scan.cwd = extracted.cwd
+			}
+			if extracted.title != "" && (extracted.forceTitle || scan.title == "") {
+				scan.title = extracted.title
 			}
 			for _, timestamp := range extracted.timestamps {
 				if scan.startedAt.IsZero() || timestamp.Before(scan.startedAt) {
@@ -341,7 +344,7 @@ func scanSessionLines(
 				if len(extracted.timestamps) > 0 {
 					timestamp = extracted.timestamps[0].UnixMilli()
 				}
-				if _, err := insert.ExecContext(ctx, sessionID, scan.lineNumber, timestamp,
+				if _, err := insert.ExecContext(ctx, sessionKey, scan.lineNumber, timestamp,
 					extracted.role, extracted.phase, extracted.text); err != nil {
 					return scan, err
 				}
@@ -365,135 +368,34 @@ func nullableUnixMilli(value time.Time) any {
 	return value.UnixMilli()
 }
 
-func extractJSONLine(line []byte) extractedLine {
+func extractSessionLine(source string, line []byte) extractedLine {
+	switch source {
+	case sourceCodex:
+		return extractCodexJSONLine(line)
+	case sourceClaudeCode:
+		return extractClaudeJSONLine(line)
+	default:
+		return extractedLine{}
+	}
+}
+
+func decodeJSONLine(line []byte) (any, bool) {
 	line = bytes.TrimSpace(line)
 	if len(line) == 0 {
-		return extractedLine{}
+		return nil, false
 	}
 
 	decoder := json.NewDecoder(bytes.NewReader(line))
 	decoder.UseNumber()
 	var value any
 	if err := decoder.Decode(&value); err != nil {
-		return extractedLine{}
+		return nil, false
 	}
-
-	var result extractedLine
-	sanitizeInjectedContext(value)
-	extractMetadata("", value, 0, &result)
-	result.text, result.role = conversationText(value)
-	result.text = limitString(result.text)
-	return result
-}
-
-func conversationText(value any) (string, string) {
-	root, ok := value.(map[string]any)
-	if !ok {
-		return "", ""
-	}
-	message := root
-	if payload, ok := root["payload"].(map[string]any); ok {
-		if role, _ := payload["role"].(string); role == "user" || role == "assistant" {
-			message = payload
-		}
-	}
-	role, _ := message["role"].(string)
-	if role != "user" && role != "assistant" {
-		return "", ""
-	}
-
-	var parts []string
-	for _, key := range []string{"message", "content", "text"} {
-		appendConversationValue(&parts, message[key])
-	}
-	if len(parts) == 0 {
-		appendConversationValue(&parts, root["message"])
-	}
-	return strings.Join(parts, "\n"), role
-}
-
-func appendConversationValue(parts *[]string, value any) {
-	switch value := value.(type) {
-	case string:
-		value = strings.TrimSpace(value)
-		if value != "" && !isBase64DataURL(value) {
-			*parts = append(*parts, value)
-		}
-	case map[string]any:
-		for _, childKey := range []string{"message", "content", "text"} {
-			appendConversationValue(parts, value[childKey])
-		}
-	case []any:
-		for _, child := range value {
-			appendConversationValue(parts, child)
-		}
-	}
+	return value, true
 }
 
 func isBase64DataURL(value string) bool {
 	return strings.HasPrefix(value, "data:") && strings.Contains(value[:min(len(value), 128)], ";base64,")
-}
-
-func sanitizeInjectedContext(value any) {
-	switch value := value.(type) {
-	case map[string]any:
-		filterInjectedContent(value)
-		for _, child := range value {
-			sanitizeInjectedContext(child)
-		}
-	case []any:
-		for _, child := range value {
-			sanitizeInjectedContext(child)
-		}
-	}
-}
-
-func filterInjectedContent(object map[string]any) {
-	content, ok := object["content"].([]any)
-	if !ok {
-		return
-	}
-	metadata, _ := object["internal_chat_message_metadata_passthrough"].(map[string]any)
-	kinds, _ := metadata["content_item_kinds"].([]any)
-	kindsAlign := len(content) == len(kinds)
-
-	filtered := make([]any, 0, len(content))
-	for index, item := range content {
-		if kindsAlign {
-			kind, _ := kinds[index].(string)
-			if !isInjectedContentKind(kind) {
-				filtered = append(filtered, item)
-			}
-		} else if !isLegacyInjectedContentItem(item) {
-			filtered = append(filtered, item)
-		}
-	}
-	object["content"] = filtered
-	delete(object, "internal_chat_message_metadata_passthrough")
-}
-
-func isLegacyInjectedContentItem(item any) bool {
-	object, ok := item.(map[string]any)
-	if !ok {
-		return false
-	}
-	text, ok := object["text"].(string)
-	if !ok {
-		return false
-	}
-	text = strings.TrimSpace(text)
-	return strings.HasPrefix(text, "# AGENTS.md instructions for ") && strings.Contains(text, "<INSTRUCTIONS>") ||
-		strings.HasPrefix(text, "<recommended_plugins>") && strings.Contains(text, "</recommended_plugins>") ||
-		strings.HasPrefix(text, "<environment_context>") && strings.Contains(text, "</environment_context>")
-}
-
-func isInjectedContentKind(kind string) bool {
-	switch kind {
-	case "agents_md.instructions", "plugins.recommendations", "environments.environment_context":
-		return true
-	default:
-		return false
-	}
 }
 
 func extractMetadata(key string, value any, depth int, result *extractedLine) {
@@ -598,38 +500,4 @@ func parseNumericTimestamp(value string) (time.Time, bool) {
 func validTimestamp(value time.Time) (time.Time, bool) {
 	year := value.Year()
 	return value, year >= 2000 && year <= 2100
-}
-
-func timestampFromFilename(path string) (time.Time, bool) {
-	match := filenamePattern.FindStringSubmatch(filepath.Base(path))
-	if len(match) < 2 {
-		return time.Time{}, false
-	}
-	value, err := time.ParseInLocation("2006-01-02T15-04-05", match[1], time.Local)
-	return value, err == nil
-}
-
-func loadSessionTitles(path string) map[string]string {
-	titles := make(map[string]string)
-	handle, err := os.Open(path)
-	if err != nil {
-		return titles
-	}
-	defer func() { _ = handle.Close() }()
-
-	scanner := bufio.NewScanner(handle)
-	scanner.Buffer(nil, maxIndexedStringBytes)
-	for scanner.Scan() {
-		var entry struct {
-			ID         string `json:"id"`
-			ThreadName string `json:"thread_name"`
-		}
-		if json.Unmarshal(scanner.Bytes(), &entry) == nil && entry.ID != "" && entry.ThreadName != "" {
-			titles[entry.ID] = entry.ThreadName
-		}
-	}
-	if scanner.Err() != nil {
-		return map[string]string{}
-	}
-	return titles
 }

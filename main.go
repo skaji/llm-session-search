@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -32,6 +33,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	flags.SetOutput(stderr)
 	flags.Usage = func() { printUsage(stderr, flags) }
 	codexHome := flags.String("codex-home", defaults.codexHome, "Codex data directory")
+	claudeHome := flags.String("claude-home", defaults.claudeHome, "Claude Code data directory")
 	dbPath := flags.String("db", defaults.dbPath, "SQLite index path")
 	listen := flags.String("listen", "127.0.0.1:8787", "HTTP listen address")
 	indexInterval := flags.Duration("index-interval", time.Minute, "Background index interval (0 disables it)")
@@ -52,9 +54,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	_, _ = fmt.Fprintf(stdout, "Indexing sessions from %s...\n", *codexHome)
+	homes := SessionHomes{Codex: *codexHome, ClaudeCode: *claudeHome}
+	for _, source := range homes.sources() {
+		_, _ = fmt.Fprintf(stdout, "Indexing %s sessions from %s...\n", source.name, source.home)
+	}
 	started := time.Now()
-	store, stats, err := openIndexedStore(ctx, *codexHome, *dbPath, enforcePermissions)
+	store, stats, err := openIndexedStore(ctx, homes, *dbPath, enforcePermissions)
 	if err != nil {
 		return err
 	}
@@ -79,7 +84,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		go func() {
 			defer close(done)
 			runPeriodicIndexer(ctx, *indexInterval, logger, func(indexCtx context.Context) (IndexStats, error) {
-				return IndexSessions(indexCtx, store, *codexHome)
+				return IndexSessions(indexCtx, store, homes)
 			})
 		}()
 	}
@@ -92,7 +97,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 	_, _ = fmt.Fprintf(stdout, "Listening on http://%s\n", *listen)
 	if *indexInterval > 0 {
-		_, _ = fmt.Fprintf(stdout, "Background indexing %s every %s\n", *codexHome, *indexInterval)
+		_, _ = fmt.Fprintf(stdout, "Background indexing %s every %s\n", formatSessionHomes(homes), *indexInterval)
 	}
 	err = server.ListenAndServe()
 	stop()
@@ -105,7 +110,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	return nil
 }
 
-func openIndexedStore(ctx context.Context, codexHome, dbPath string, enforcePermissions bool) (*Store, IndexStats, error) {
+func openIndexedStore(ctx context.Context, homes SessionHomes, dbPath string, enforcePermissions bool) (*Store, IndexStats, error) {
 	if err := ensurePrivateDir(filepath.Dir(dbPath), enforcePermissions); err != nil {
 		return nil, IndexStats{}, err
 	}
@@ -113,7 +118,7 @@ func openIndexedStore(ctx context.Context, codexHome, dbPath string, enforcePerm
 	if err != nil {
 		return nil, IndexStats{}, err
 	}
-	stats, err := IndexSessions(ctx, store, codexHome)
+	stats, err := IndexSessions(ctx, store, homes)
 	if err != nil {
 		_ = store.Close()
 		return nil, IndexStats{}, err
@@ -147,8 +152,9 @@ func runPeriodicIndexer(ctx context.Context, interval time.Duration, logger *log
 }
 
 type paths struct {
-	codexHome string
-	dbPath    string
+	codexHome  string
+	claudeHome string
+	dbPath     string
 }
 
 func defaultPaths() (paths, error) {
@@ -156,10 +162,24 @@ func defaultPaths() (paths, error) {
 	if err != nil {
 		return paths{}, fmt.Errorf("find home directory: %w", err)
 	}
+	claudeHome := os.Getenv("CLAUDE_CONFIG_DIR")
+	if claudeHome == "" {
+		claudeHome = filepath.Join(home, ".claude")
+	}
 	return paths{
-		codexHome: filepath.Join(home, ".codex"),
-		dbPath:    filepath.Join(home, ".llm-session-search", "index.db"),
+		codexHome:  filepath.Join(home, ".codex"),
+		claudeHome: claudeHome,
+		dbPath:     filepath.Join(home, ".llm-session-search", "index.db"),
 	}, nil
+}
+
+func formatSessionHomes(homes SessionHomes) string {
+	sources := homes.sources()
+	parts := make([]string, 0, len(sources))
+	for _, source := range sources {
+		parts = append(parts, source.name+" ("+source.home+")")
+	}
+	return strings.Join(parts, ", ")
 }
 
 func ensurePrivateDir(path string, enforcePermissions bool) error {
@@ -185,7 +205,7 @@ func printUsage(w io.Writer, flags *flag.FlagSet) {
 	_, _ = fmt.Fprintln(w, `Usage:
   llm-session-search [options]
 
-Index Codex JSONL session files and start the local search web application.
+Index Codex and Claude Code JSONL sessions and start the local search web application.
 
 Options:`)
 	flags.PrintDefaults()
