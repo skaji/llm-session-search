@@ -46,6 +46,22 @@ Available options:
 Set `--index-interval 0` to disable background updates. The startup update
 always runs.
 
+To run the server in the background:
+
+```console
+./llm-session-search --daemon
+```
+
+The PID and combined output log are stored as `app.pid` and `app.log` next to
+the database. Stop the background process with:
+
+```console
+kill "$(cat ~/.llm-session-search/app.pid)"
+```
+
+Other options can be combined with `--daemon`. When `--db` selects a custom
+database location, the PID and log files are stored in that directory.
+
 ## Search behavior
 
 Space-separated terms use session-level AND semantics, so terms may occur in

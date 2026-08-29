@@ -39,6 +39,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	dbPath := flags.String("db", defaults.dbPath, "SQLite index path")
 	listen := flags.String("listen", "127.0.0.1:8787", "HTTP listen address")
 	indexInterval := flags.Duration("index-interval", time.Minute, "Background index interval (0 disables it)")
+	daemonFlag := flags.Bool("daemon", false, "run in the background")
 	versionFlag := flags.Bool("version", false, "show version")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -47,7 +48,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	if *versionFlag {
-		fmt.Fprintln(stdout, version)
+		_, _ = fmt.Fprintln(stdout, version)
 		return nil
 	}
 	if flags.NArg() != 0 {
@@ -58,6 +59,20 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 
 	enforcePermissions := filepath.Clean(*dbPath) == filepath.Clean(defaults.dbPath)
+	if *daemonFlag {
+		state, err := startDaemon(*dbPath, enforcePermissions)
+		if err != nil {
+			return err
+		}
+		if state.child != nil {
+			_, _ = fmt.Fprintf(stdout, "Started llm-session-search in the background (pid %d)\n", state.child.Pid)
+			_, _ = fmt.Fprintf(stdout, "PID file: %s\n", state.pidPath)
+			_, _ = fmt.Fprintf(stdout, "Log: %s\n", state.logPath)
+			return nil
+		}
+		defer state.release()
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 

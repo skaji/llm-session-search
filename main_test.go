@@ -33,6 +33,17 @@ func TestRunRejectsRemovedSubcommands(t *testing.T) {
 	}
 }
 
+func TestRunVersionDoesNotStartDaemon(t *testing.T) {
+	t.Parallel()
+	var stdout bytes.Buffer
+	if err := run([]string{"--daemon", "--version"}, &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != version+"\n" {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
 func TestRunReportsInitialIndexStart(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
