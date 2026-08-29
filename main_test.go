@@ -44,17 +44,34 @@ func TestRunVersionDoesNotStartDaemon(t *testing.T) {
 	}
 }
 
+func TestRunRejectsDBOption(t *testing.T) {
+	t.Parallel()
+	var stderr bytes.Buffer
+	err := run([]string{"--db", filepath.Join(t.TempDir(), "index.db")}, &bytes.Buffer{}, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "flag provided but not defined: -db") {
+		t.Fatalf("run() error = %v, stderr = %q", err, stderr.String())
+	}
+}
+
+func TestRunRejectsMultipleDaemonOperations(t *testing.T) {
+	t.Parallel()
+	err := run([]string{"--daemon", "--daemon-stop"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("run() error = %v", err)
+	}
+}
+
 func TestRunReportsInitialIndexStart(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	codexHome := filepath.Join(root, "missing-codex-home")
-	dbPath := filepath.Join(root, "data", "index.db")
+	dataDir := filepath.Join(root, "data")
 	var stdout bytes.Buffer
 
 	err := run([]string{
 		"--codex-home", codexHome,
 		"--claude-home=",
-		"--db", dbPath,
+		"--data-dir", dataDir,
 		"--index-interval", "0",
 	}, &stdout, &bytes.Buffer{})
 	if err == nil {
@@ -80,7 +97,7 @@ func TestOpenIndexedStoreCreatesDatabaseAndIndex(t *testing.T) {
 	}
 	dbPath := filepath.Join(root, "new-data", "index.db")
 
-	store, stats, err := openIndexedStore(context.Background(), SessionHomes{Codex: codexHome}, dbPath, false)
+	store, stats, err := openIndexedStore(context.Background(), SessionHomes{Codex: codexHome}, dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}

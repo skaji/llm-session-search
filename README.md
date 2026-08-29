@@ -38,13 +38,14 @@ Available options:
 ./llm-session-search \
   --codex-home /path/to/.codex \
   --claude-home /path/to/.claude \
-  --db /path/to/index.db \
+  --data-dir /path/to/data \
   --listen 127.0.0.1:9000 \
   --index-interval 1m
 ```
 
 Set `--index-interval 0` to disable background updates. The startup update
-always runs.
+always runs. The data directory stores the database as `index.db`; daemon mode
+also uses it for `app.pid` and `app.log`.
 
 To run the server in the background:
 
@@ -52,15 +53,21 @@ To run the server in the background:
 ./llm-session-search --daemon
 ```
 
-The PID and combined output log are stored as `app.pid` and `app.log` next to
-the database. Stop the background process with:
+`--daemon` waits until the server is listening. If the daemon is already
+running, it reports the existing PID and exits successfully. Use the following
+options to inspect or control it:
 
 ```console
-kill "$(cat ~/.llm-session-search/app.pid)"
+./llm-session-search --daemon-status
+./llm-session-search --daemon-stop
+./llm-session-search --daemon-restart
 ```
 
-Other options can be combined with `--daemon`. When `--db` selects a custom
-database location, the PID and log files are stored in that directory.
+Stopping an already stopped daemon also succeeds. Status exits with a non-zero
+status when the daemon is not running. Restart starts a new daemon when none is
+running. The four daemon options are mutually exclusive. Other options can be
+combined with `--daemon` and `--daemon-restart`; use the same `--data-dir` for
+all later status and control operations.
 
 ## Search behavior
 

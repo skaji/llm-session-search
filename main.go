@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -36,10 +37,13 @@ func run(args []string, stdout, stderr io.Writer) error {
 	flags.Usage = func() { printUsage(stderr, flags) }
 	codexHome := flags.String("codex-home", defaults.codexHome, "Codex data directory")
 	claudeHome := flags.String("claude-home", defaults.claudeHome, "Claude Code data directory")
-	dbPath := flags.String("db", defaults.dbPath, "SQLite index path")
+	dataDir := flags.String("data-dir", defaults.dataDir, "Application data directory")
 	listen := flags.String("listen", "127.0.0.1:8787", "HTTP listen address")
 	indexInterval := flags.Duration("index-interval", time.Minute, "Background index interval (0 disables it)")
 	daemonFlag := flags.Bool("daemon", false, "run in the background")
+	daemonStatusFlag := flags.Bool("daemon-status", false, "report whether the background process is running")
+	daemonStopFlag := flags.Bool("daemon-stop", false, "stop the background process")
+	daemonRestartFlag := flags.Bool("daemon-restart", false, "restart the background process")
 	versionFlag := flags.Bool("version", false, "show version")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -58,20 +62,27 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return errors.New("index interval must not be negative")
 	}
 
-	enforcePermissions := filepath.Clean(*dbPath) == filepath.Clean(defaults.dbPath)
-	if *daemonFlag {
-		state, err := startDaemon(*dbPath, enforcePermissions)
+	operation, err := selectDaemonOperation(*daemonFlag, *daemonStatusFlag, *daemonStopFlag, *daemonRestartFlag)
+	if err != nil {
+		return err
+	}
+	absoluteDataDir, err := filepath.Abs(*dataDir)
+	if err != nil {
+		return fmt.Errorf("resolve data directory: %w", err)
+	}
+	var daemonChild *daemonState
+	if operation != daemonOperationNone {
+		result, err := handleDaemonOperation(operation, absoluteDataDir, stdout)
 		if err != nil {
 			return err
 		}
-		if state.child != nil {
-			_, _ = fmt.Fprintf(stdout, "Started llm-session-search in the background (pid %d)\n", state.child.Pid)
-			_, _ = fmt.Fprintf(stdout, "PID file: %s\n", state.pidPath)
-			_, _ = fmt.Fprintf(stdout, "Log: %s\n", state.logPath)
+		if !result.runServer {
 			return nil
 		}
-		defer state.release()
+		daemonChild = &result.state
+		defer result.state.release()
 	}
+	dbPath := filepath.Join(absoluteDataDir, "index.db")
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -81,7 +92,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		_, _ = fmt.Fprintf(stdout, "Indexing %s sessions from %s...\n", source.name, source.home)
 	}
 	started := time.Now()
-	store, stats, err := openIndexedStore(ctx, homes, *dbPath, enforcePermissions)
+	store, stats, err := openIndexedStore(ctx, homes, dbPath)
 	if err != nil {
 		return err
 	}
@@ -89,13 +100,23 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 	_, _ = fmt.Fprintf(stdout, "Indexed %d sessions (%d changed, %d unchanged, %d records) in %s\n",
 		stats.Sessions, stats.Changed, stats.Unchanged, stats.Records, time.Since(started).Round(time.Millisecond))
-	_, _ = fmt.Fprintf(stdout, "Database: %s\n", *dbPath)
+	_, _ = fmt.Fprintf(stdout, "Database: %s\n", dbPath)
 
 	server := &http.Server{
 		Addr:              *listen,
 		Handler:           NewWebHandler(store),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
+	}
+	listener, err := net.Listen("tcp", *listen)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", *listen, err)
+	}
+	defer func() { _ = listener.Close() }()
+	if daemonChild != nil {
+		if err := daemonChild.markReady(); err != nil {
+			return err
+		}
 	}
 
 	logger := log.New(stderr, "", log.LstdFlags)
@@ -121,7 +142,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if *indexInterval > 0 {
 		_, _ = fmt.Fprintf(stdout, "Background indexing %s every %s\n", formatSessionHomes(homes), *indexInterval)
 	}
-	err = server.ListenAndServe()
+	err = server.Serve(listener)
 	stop()
 	if indexerDone != nil {
 		<-indexerDone
@@ -132,8 +153,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 	return nil
 }
 
-func openIndexedStore(ctx context.Context, homes SessionHomes, dbPath string, enforcePermissions bool) (*Store, IndexStats, error) {
-	if err := ensurePrivateDir(filepath.Dir(dbPath), enforcePermissions); err != nil {
+func openIndexedStore(ctx context.Context, homes SessionHomes, dbPath string) (*Store, IndexStats, error) {
+	if err := ensurePrivateDir(filepath.Dir(dbPath)); err != nil {
 		return nil, IndexStats{}, err
 	}
 	store, err := OpenStore(dbPath)
@@ -172,7 +193,7 @@ func runPeriodicIndexer(ctx context.Context, interval time.Duration, logger *log
 type paths struct {
 	codexHome  string
 	claudeHome string
-	dbPath     string
+	dataDir    string
 }
 
 func defaultPaths() (paths, error) {
@@ -187,7 +208,7 @@ func defaultPaths() (paths, error) {
 	return paths{
 		codexHome:  filepath.Join(home, ".codex"),
 		claudeHome: claudeHome,
-		dbPath:     filepath.Join(home, ".llm-session-search", "index.db"),
+		dataDir:    filepath.Join(home, ".llm-session-search"),
 	}, nil
 }
 
@@ -200,14 +221,12 @@ func formatSessionHomes(homes SessionHomes) string {
 	return strings.Join(parts, ", ")
 }
 
-func ensurePrivateDir(path string, enforcePermissions bool) error {
+func ensurePrivateDir(path string) error {
 	if err := os.MkdirAll(path, 0o700); err != nil {
 		return fmt.Errorf("create data directory: %w", err)
 	}
-	if enforcePermissions {
-		if err := os.Chmod(path, 0o700); err != nil {
-			return fmt.Errorf("set data directory permissions: %w", err)
-		}
+	if err := os.Chmod(path, 0o700); err != nil {
+		return fmt.Errorf("set data directory permissions: %w", err)
 	}
 	info, err := os.Stat(path)
 	if err != nil {
