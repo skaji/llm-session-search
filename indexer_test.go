@@ -13,7 +13,7 @@ const (
 	testArchivedID = "019f4fa9-88da-7fd3-b18c-130893186a5f"
 )
 
-func TestIndexSessions(t *testing.T) {
+func TestIndexCodexSessions(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	dbDir := filepath.Join(root, ".llm-session-search")
@@ -55,7 +55,7 @@ func TestIndexSessions(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	stats, err := IndexSessions(context.Background(), store, codexHome)
+	stats, err := IndexSessions(context.Background(), store, SessionHomes{Codex: codexHome})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,14 +113,14 @@ func TestIndexSessions(t *testing.T) {
 	if len(phraseHits) != 1 || phraseHits[0].ID != testArchivedID {
 		t.Fatalf("quoted phrase was not kept together: %+v", phraseHits)
 	}
-	records, err := store.SessionRecords(context.Background(), testSessionID, "tinyenv github", 50)
+	records, err := store.SessionRecords(context.Background(), mustSessionKey(t, store, sourceCodex, testSessionID), "tinyenv github", 50)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(records) != 2 {
 		t.Fatalf("session-level AND did not return matching records: %+v", records)
 	}
-	conversation, err := store.SessionRecords(context.Background(), testSessionID, "", 50)
+	conversation, err := store.SessionRecords(context.Background(), mustSessionKey(t, store, sourceCodex, testSessionID), "", 50)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestIndexSessions(t *testing.T) {
 			t.Fatalf("non-conversation record was returned: %+v", record)
 		}
 	}
-	stats, err = IndexSessions(context.Background(), store, codexHome)
+	stats, err = IndexSessions(context.Background(), store, SessionHomes{Codex: codexHome})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,14 +144,14 @@ func TestIndexSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 	sessionPath = movedSessionPath
-	stats, err = IndexSessions(context.Background(), store, codexHome)
+	stats, err = IndexSessions(context.Background(), store, SessionHomes{Codex: codexHome})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if stats.Changed != 1 || stats.Unchanged != 1 {
 		t.Fatalf("moved session was not reindexed: %+v", stats)
 	}
-	movedSession, err := store.GetSession(context.Background(), testSessionID)
+	movedSession, err := store.GetSession(context.Background(), sourceCodex, testSessionID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,14 +171,14 @@ func TestIndexSessions(t *testing.T) {
 	if err := handle.Close(); err != nil {
 		t.Fatal(err)
 	}
-	stats, err = IndexSessions(context.Background(), store, codexHome)
+	stats, err = IndexSessions(context.Background(), store, SessionHomes{Codex: codexHome})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if stats.Changed != 1 || stats.Unchanged != 1 || stats.Records != 1 {
 		t.Fatalf("changed file was not reindexed: %+v", stats)
 	}
-	appended, err := store.SessionRecords(context.Background(), testSessionID, "newly appended", 50)
+	appended, err := store.SessionRecords(context.Background(), mustSessionKey(t, store, sourceCodex, testSessionID), "newly appended", 50)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,7 @@ func TestIndexSessions(t *testing.T) {
 	if err := os.Remove(archivedPath); err != nil {
 		t.Fatal(err)
 	}
-	stats, err = IndexSessions(context.Background(), store, codexHome)
+	stats, err = IndexSessions(context.Background(), store, SessionHomes{Codex: codexHome})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,9 +205,137 @@ func TestIndexSessions(t *testing.T) {
 	}
 }
 
-func TestExtractJSONLineMetadata(t *testing.T) {
+func TestIndexClaudeCodeSessions(t *testing.T) {
 	t.Parallel()
-	extracted := extractJSONLine([]byte(`{"message":"needle","timestamp":"2026-08-29T12:34:56Z","payload":{"role":"assistant","phase":"commentary","cwd":"/work","result":{"created_at":"2023-01-01T00:00:00Z"}}}`))
+	root := t.TempDir()
+	codexHome := filepath.Join(root, ".codex")
+	codexSessions := filepath.Join(codexHome, "sessions")
+	claudeHome := filepath.Join(root, ".claude")
+	claudeProject := filepath.Join(claudeHome, "projects", "-tmp-project")
+	for _, dir := range []string{codexSessions, claudeProject} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	codexPath := filepath.Join(codexSessions, "rollout-2026-08-29T09-00-00-"+testSessionID+".jsonl")
+	if err := os.WriteFile(codexPath, []byte(`{"timestamp":"2026-08-29T00:00:00Z","role":"user","message":"Codex uses the same UUID"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	claudePath := filepath.Join(claudeProject, testSessionID+".jsonl")
+	claudeData := `{"type":"queue-operation","operation":"enqueue","content":"queued duplicate","sessionId":"` + testSessionID + `","timestamp":"2026-08-29T01:00:00Z"}
+{"type":"ai-title","aiTitle":"Generated Claude title","sessionId":"` + testSessionID + `"}
+{"type":"user","sessionId":"` + testSessionID + `","uuid":"user-1","cwd":"/tmp/project","timestamp":"2026-08-29T01:00:01Z","message":{"role":"user","content":"Claude human prompt"}}
+{"type":"assistant","sessionId":"` + testSessionID + `","uuid":"assistant-thinking","timestamp":"2026-08-29T01:00:02Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"private reasoning secret"}]}}
+{"type":"assistant","sessionId":"` + testSessionID + `","uuid":"assistant-tool","timestamp":"2026-08-29T01:00:03Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool-1","name":"Read","input":{"path":"tool input secret"}}]}}
+{"type":"user","sessionId":"` + testSessionID + `","uuid":"tool-result","timestamp":"2026-08-29T01:00:04Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-1","content":"tool output secret"}]}}
+{"type":"assistant","sessionId":"` + testSessionID + `","uuid":"assistant-text","timestamp":"2026-08-29T01:00:05Z","message":{"role":"assistant","content":[{"type":"text","text":"Visible Claude reply"}]}}
+{"type":"assistant","sessionId":"` + testSessionID + `","uuid":"assistant-reminder","timestamp":"2026-08-29T01:00:05Z","message":{"role":"assistant","content":[{"type":"text","text":"<system-reminder>assistant reminder secret</system-reminder>"}]}}
+{"type":"user","sessionId":"` + testSessionID + `","uuid":"user-2","timestamp":"2026-08-29T01:00:06Z","message":{"role":"user","content":[{"type":"text","text":"<system-reminder>user reminder secret</system-reminder>\nClaude follow-up"},{"type":"tool_result","tool_use_id":"tool-2","content":"mixed tool secret"}]}}
+{"type":"user","sessionId":"` + testSessionID + `","uuid":"local-command","timestamp":"2026-08-29T01:00:07Z","message":{"role":"user","content":"<command-name>/clear</command-name><command-args>command secret</command-args>"}}
+{"type":"custom-title","customTitle":"Named Claude session","sessionId":"` + testSessionID + `"}
+{"type":"ai-title","aiTitle":"Later generated title","sessionId":"` + testSessionID + `"}
+`
+	if err := os.WriteFile(claudePath, []byte(claudeData), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	subagents := filepath.Join(claudeProject, testSessionID, "subagents")
+	if err := os.MkdirAll(subagents, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subagents, "agent-internal.jsonl"), []byte(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"subagent secret"}]}}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := OpenStore(filepath.Join(root, "index.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	stats, err := IndexSessions(context.Background(), store, SessionHomes{Codex: codexHome, ClaudeCode: claudeHome})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Sessions != 2 || stats.Records != 4 {
+		t.Fatalf("unexpected stats: %+v", stats)
+	}
+
+	codex, err := store.GetSession(context.Background(), sourceCodex, testSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claude, err := store.GetSession(context.Background(), sourceClaudeCode, testSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if codex.Key == claude.Key {
+		t.Fatalf("sources shared an internal key: codex=%+v claude=%+v", codex, claude)
+	}
+	if claude.Title != "Named Claude session" || claude.CWD != "/tmp/project" {
+		t.Fatalf("unexpected Claude metadata: %+v", claude)
+	}
+	records, err := store.SessionRecords(context.Background(), claude.Key, "", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 3 {
+		t.Fatalf("Claude conversation records = %d, want 3: %+v", len(records), records)
+	}
+	for _, query := range []string{"queued duplicate", "private reasoning secret", "tool input secret", "tool output secret", "mixed tool secret", "assistant reminder secret", "user reminder secret", "command secret", "subagent secret"} {
+		hits, err := store.Search(context.Background(), query, 10, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(hits) != 0 {
+			t.Fatalf("internal Claude content %q was indexed: %+v", query, hits)
+		}
+	}
+	hits, err := store.Search(context.Background(), "Visible Claude reply", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 || hits[0].Source != sourceClaudeCode {
+		t.Fatalf("Claude reply was not searchable: %+v", hits)
+	}
+
+	handle, err := os.OpenFile(claudePath, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := handle.WriteString(`{"type":"assistant","sessionId":"` + testSessionID + `","uuid":"assistant-appended","timestamp":"2026-08-29T01:01:00Z","message":{"role":"assistant","content":[{"type":"text","text":"Appended Claude reply"}]}}` + "\n" +
+		`{"type":"custom-title","customTitle":"Renamed Claude session","sessionId":"` + testSessionID + `"}` + "\n"); err != nil {
+		_ = handle.Close()
+		t.Fatal(err)
+	}
+	if err := handle.Close(); err != nil {
+		t.Fatal(err)
+	}
+	stats, err = IndexSessions(context.Background(), store, SessionHomes{Codex: codexHome, ClaudeCode: claudeHome})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Changed != 1 || stats.Unchanged != 1 || stats.Records != 1 {
+		t.Fatalf("Claude append was not indexed incrementally: %+v", stats)
+	}
+	claude, err = store.GetSession(context.Background(), sourceClaudeCode, testSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claude.Title != "Renamed Claude session" {
+		t.Fatalf("Claude title was not updated: %+v", claude)
+	}
+	hits, err = store.Search(context.Background(), "Appended Claude reply", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 || hits[0].Source != sourceClaudeCode {
+		t.Fatalf("appended Claude reply was not searchable: %+v", hits)
+	}
+}
+
+func TestExtractCodexJSONLineMetadata(t *testing.T) {
+	t.Parallel()
+	extracted := extractCodexJSONLine([]byte(`{"message":"needle","timestamp":"2026-08-29T12:34:56Z","payload":{"role":"assistant","phase":"commentary","cwd":"/work","result":{"created_at":"2023-01-01T00:00:00Z"}}}`))
 	if extracted.text == "" || extracted.role != "assistant" || extracted.phase != "commentary" || extracted.cwd != "/work" {
 		t.Fatalf("unexpected extraction: %+v", extracted)
 	}
@@ -216,9 +344,9 @@ func TestExtractJSONLineMetadata(t *testing.T) {
 	}
 }
 
-func TestExtractJSONLineUsesConversationBody(t *testing.T) {
+func TestExtractCodexJSONLineUsesConversationBody(t *testing.T) {
 	t.Parallel()
-	extracted := extractJSONLine([]byte(`{
+	extracted := extractCodexJSONLine([]byte(`{
         "timestamp":"2026-08-10T17:03:42.779Z",
         "type":"response_item",
         "payload":{
@@ -240,7 +368,7 @@ func TestExtractJSONLineUsesConversationBody(t *testing.T) {
 	}
 }
 
-func TestExtractJSONLineExcludesInjectedContext(t *testing.T) {
+func TestExtractCodexJSONLineExcludesInjectedContext(t *testing.T) {
 	t.Parallel()
 	line := []byte(`{
         "timestamp":"2026-08-29T12:34:56Z",
@@ -266,7 +394,7 @@ func TestExtractJSONLineExcludesInjectedContext(t *testing.T) {
             }
         }
     }`)
-	extracted := extractJSONLine(line)
+	extracted := extractCodexJSONLine(line)
 	if !strings.Contains(extracted.text, "actual user request") {
 		t.Fatalf("user content was excluded: %q", extracted.text)
 	}
@@ -280,7 +408,7 @@ func TestExtractJSONLineExcludesInjectedContext(t *testing.T) {
 		t.Fatalf("injected context was indexed: %q", extracted.text)
 	}
 
-	onlyInjected := extractJSONLine([]byte(`{
+	onlyInjected := extractCodexJSONLine([]byte(`{
         "timestamp":"2026-08-29T12:34:56Z",
         "type":"response_item",
         "payload":{
@@ -299,12 +427,12 @@ func TestExtractJSONLineExcludesInjectedContext(t *testing.T) {
 		t.Fatalf("empty injected message lost its timestamp: %v", onlyInjected.timestamps)
 	}
 
-	manual := extractJSONLine([]byte(`{"role":"user","message":"I opened AGENTS.md manually"}`))
+	manual := extractCodexJSONLine([]byte(`{"role":"user","message":"I opened AGENTS.md manually"}`))
 	if !strings.Contains(manual.text, "AGENTS.md manually") {
 		t.Fatalf("ordinary AGENTS.md mention was excluded: %q", manual.text)
 	}
 
-	legacy := extractJSONLine([]byte(`{
+	legacy := extractCodexJSONLine([]byte(`{
         "payload":{
             "role":"user",
             "content":[
@@ -321,7 +449,7 @@ func TestExtractJSONLineExcludesInjectedContext(t *testing.T) {
 	}
 }
 
-func TestTimestampFromFilename(t *testing.T) {
+func TestCodexTimestampFromFilename(t *testing.T) {
 	t.Parallel()
 	timestamp, ok := timestampFromFilename("rollout-2026-08-29T17-04-07-" + testSessionID + ".jsonl")
 	if !ok {
@@ -352,7 +480,7 @@ func TestIndexSessionsRetriesIncompleteLastLine(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	stats, err := IndexSessions(context.Background(), store, codexHome)
+	stats, err := IndexSessions(context.Background(), store, SessionHomes{Codex: codexHome})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -370,7 +498,7 @@ func TestIndexSessionsRetriesIncompleteLastLine(t *testing.T) {
 	if err := handle.Close(); err != nil {
 		t.Fatal(err)
 	}
-	stats, err = IndexSessions(context.Background(), store, codexHome)
+	stats, err = IndexSessions(context.Background(), store, SessionHomes{Codex: codexHome})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -384,4 +512,13 @@ func TestIndexSessionsRetriesIncompleteLastLine(t *testing.T) {
 	if len(hits) != 1 {
 		t.Fatalf("completed line was not searchable: %+v", hits)
 	}
+}
+
+func mustSessionKey(t *testing.T, store *Store, source, id string) int64 {
+	t.Helper()
+	session, err := store.GetSession(context.Background(), source, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return session.Key
 }

@@ -2,58 +2,14 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"path/filepath"
 	"testing"
 )
 
-func TestOpenStoreMigratesSchema(t *testing.T) {
+func TestOpenStoreCreatesSourceSchema(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "index.db")
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`
-		CREATE TABLE app_meta (
-			key TEXT PRIMARY KEY,
-			value TEXT NOT NULL
-		);
-		INSERT INTO app_meta(key, value) VALUES ('index_version', '7');
-		CREATE TABLE sessions (
-			id TEXT PRIMARY KEY,
-			path TEXT NOT NULL,
-			archived INTEGER NOT NULL,
-			title TEXT NOT NULL DEFAULT '',
-			cwd TEXT NOT NULL DEFAULT '',
-			started_at_ms INTEGER,
-			updated_at_ms INTEGER,
-			size INTEGER NOT NULL,
-			mtime_ns INTEGER NOT NULL,
-			scan_generation TEXT NOT NULL
-		);
-		CREATE TABLE records (
-			id INTEGER PRIMARY KEY,
-			session_id TEXT NOT NULL,
-			line_number INTEGER NOT NULL,
-			byte_offset INTEGER NOT NULL,
-			timestamp_ms INTEGER,
-			role TEXT NOT NULL DEFAULT '',
-			phase TEXT NOT NULL DEFAULT '',
-			kind TEXT NOT NULL DEFAULT '',
-			text TEXT NOT NULL
-		);
-		INSERT INTO records(
-			session_id, line_number, byte_offset, role, phase, kind, text
-		) VALUES ('old-session', 1, 0, 'user', '', 'user', 'obsolete row')`); err != nil {
-		_ = db.Close()
-		t.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-
 	store, err := OpenStore(path)
 	if err != nil {
 		t.Fatal(err)
@@ -61,26 +17,19 @@ func TestOpenStoreMigratesSchema(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 	var columns int
 	if err := store.db.QueryRow(`
-		SELECT count(*) FROM pragma_table_info('sessions') WHERE name = 'line_count'`).Scan(&columns); err != nil {
+		SELECT count(*) FROM pragma_table_info('sessions')
+		WHERE name IN ('key', 'source', 'source_id', 'line_count')`).Scan(&columns); err != nil {
+		t.Fatal(err)
+	}
+	if columns != 4 {
+		t.Fatalf("source-aware session columns = %d, want 4", columns)
+	}
+	if err := store.db.QueryRow(`
+		SELECT count(*) FROM pragma_table_info('records') WHERE name = 'session_key'`).Scan(&columns); err != nil {
 		t.Fatal(err)
 	}
 	if columns != 1 {
-		t.Fatalf("line_count columns = %d, want 1", columns)
-	}
-	if err := store.db.QueryRow(`
-		SELECT count(*) FROM pragma_table_info('records')
-		WHERE name IN ('byte_offset', 'kind')`).Scan(&columns); err != nil {
-		t.Fatal(err)
-	}
-	if columns != 0 {
-		t.Fatalf("obsolete record columns = %d, want 0", columns)
-	}
-	version, err := store.indexVersion(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if version != "" {
-		t.Fatalf("index version = %q, want empty after record table rebuild", version)
+		t.Fatalf("session_key columns = %d, want 1", columns)
 	}
 }
 

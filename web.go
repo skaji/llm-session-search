@@ -48,6 +48,7 @@ func NewWebHandler(store *Store) http.Handler {
 	functions := template.FuncMap{
 		"formatTime": unixMilliString,
 		"formatSize": formatSize,
+		"sourceName": sourceName,
 		"highlight": func(text, query string) []textPart {
 			return highlightText(text, parseSearchQuery(query))
 		},
@@ -61,9 +62,21 @@ func NewWebHandler(store *Store) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /app.js", staticHandler("text/javascript; charset=utf-8", "no-cache", appJS))
 	mux.HandleFunc("GET /favicon.svg", staticHandler("image/svg+xml; charset=utf-8", "public, max-age=86400", faviconSVG))
+	mux.HandleFunc("GET /icons/openai.svg", staticHandler("image/svg+xml; charset=utf-8", "public, max-age=86400", openAIIconSVG))
 	mux.HandleFunc("GET /", app.index)
-	mux.HandleFunc("GET /sessions/{id}", app.session)
+	mux.HandleFunc("GET /sessions/{source}/{id}", app.session)
 	return securityHeaders(mux)
+}
+
+func sourceName(source string) string {
+	switch source {
+	case sourceCodex:
+		return "Codex"
+	case sourceClaudeCode:
+		return "Claude Code"
+	default:
+		return source
+	}
 }
 
 func badgeClass(value string) string {
@@ -142,8 +155,9 @@ func (app *webApp) index(w http.ResponseWriter, r *http.Request) {
 }
 
 func (app *webApp) session(w http.ResponseWriter, r *http.Request) {
+	source := r.PathValue("source")
 	id := r.PathValue("id")
-	session, err := app.store.GetSession(r.Context(), id)
+	session, err := app.store.GetSession(r.Context(), source, id)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			http.NotFound(w, r)
@@ -154,7 +168,7 @@ func (app *webApp) session(w http.ResponseWriter, r *http.Request) {
 	}
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
 	fromHistory := r.URL.Query().Get("from_history") == "1"
-	records, err := app.store.SessionRecords(r.Context(), id, query, 500)
+	records, err := app.store.SessionRecords(r.Context(), session.Key, query, 500)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -171,7 +185,7 @@ func (app *webApp) session(w http.ResponseWriter, r *http.Request) {
 		History:     history,
 		FromHistory: fromHistory,
 	}
-	if uuidPattern.MatchString(id) {
+	if source == sourceCodex && uuidPattern.MatchString(id) {
 		page.CodexURL = template.URL("codex://threads/" + id)
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -252,6 +266,11 @@ mark { padding: 0 2px; border-radius: 3px; background: #ffe169; color: #25200b; 
 .badge-assistant { background: #e3f3e7; color: #28613c; }
 .badge-commentary { background: #fff0d5; color: #81530a; }
 .badge-final-answer { background: #eee7fa; color: #64418a; }
+.source-badge { display: inline-flex; align-items: center; gap: 5px; padding-left: 3px; font-weight: 650; }
+.source-icon-tile { display: inline-grid; width: 18px; height: 18px; place-items: center; border-radius: 999px; background: #fff; }
+.source-icon { display: block; width: 13px; height: 13px; }
+.source-claude-dot { width: 12px; height: 12px; border-radius: 50%; background: #d97757; }
+.source-claude-code { background: #f8e6df; color: #85452f; }
 .archived { background: #f2e4d5; color: #84522a; }
 .pager { display: flex; justify-content: space-between; margin-top: 22px; }
 .session-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
@@ -272,6 +291,8 @@ mark { padding: 0 2px; border-radius: 3px; background: #ffe169; color: #25200b; 
   .badge-assistant { background: #244331; color: #b8e4c5; }
   .badge-commentary { background: #4c381a; color: #ffd99a; }
   .badge-final-answer { background: #403050; color: #ddc5f6; }
+  .source-codex { background: #3b3c38; color: #edede8; }
+  .source-claude-code { background: #523126; color: #f1b39d; }
   mark { background: #8a6c00; color: #fff4bd; }
   a { color: #66cbb6; }
   .history-link { color: #d0cfc8; }
@@ -287,6 +308,11 @@ const faviconSVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <path d="M37 37 50 50" fill="none" stroke="#fff" stroke-width="7" stroke-linecap="round"/>
 </svg>`
 
+const openAIIconSVG = `<svg width="721" height="721" viewBox="0 0 721 721" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g clip-path="url(#clip0_1637_2934)"><g clip-path="url(#clip1_1637_2934)"><path d="M304.246 294.611V249.028C304.246 245.189 305.687 242.309 309.044 240.392L400.692 187.612C413.167 180.415 428.042 177.058 443.394 177.058C500.971 177.058 537.44 221.682 537.44 269.182C537.44 272.54 537.44 276.379 536.959 280.218L441.954 224.558C436.197 221.201 430.437 221.201 424.68 224.558L304.246 294.611ZM518.245 472.145V363.224C518.245 356.505 515.364 351.707 509.608 348.349L389.174 278.296L428.519 255.743C431.877 253.826 434.757 253.826 438.115 255.743L529.762 308.523C556.154 323.879 573.905 356.505 573.905 388.171C573.905 424.636 552.315 458.225 518.245 472.141V472.145ZM275.937 376.182L236.592 353.152C233.235 351.235 231.794 348.354 231.794 344.515V238.956C231.794 187.617 271.139 148.749 324.4 148.749C344.555 148.749 363.264 155.468 379.102 167.463L284.578 222.164C278.822 225.521 275.942 230.319 275.942 237.039V376.186L275.937 376.182ZM360.626 425.122L304.246 393.455V326.283L360.626 294.616L417.002 326.283V393.455L360.626 425.122ZM396.852 570.989C376.698 570.989 357.989 564.27 342.151 552.276L436.674 497.574C442.431 494.217 445.311 489.419 445.311 482.699V343.552L485.138 366.582C488.495 368.499 489.936 371.379 489.936 375.219V480.778C489.936 532.117 450.109 570.985 396.852 570.985V570.989ZM283.134 463.99L191.486 411.211C165.094 395.854 147.343 363.229 147.343 331.562C147.343 294.616 169.415 261.509 203.48 247.593V356.991C203.48 363.71 206.361 368.508 212.117 371.866L332.074 441.437L292.729 463.99C289.372 465.907 286.491 465.907 283.134 463.99ZM277.859 542.68C223.639 542.68 183.813 501.895 183.813 451.514C183.813 447.675 184.294 443.836 184.771 439.997L279.295 494.698C285.051 498.056 290.812 498.056 296.568 494.698L417.002 425.127V470.71C417.002 474.549 415.562 477.429 412.204 479.346L320.557 532.126C308.081 539.323 293.206 542.68 277.854 542.68H277.859ZM396.852 599.776C454.911 599.776 503.37 558.513 514.41 503.812C568.149 489.896 602.696 439.515 602.696 388.176C602.696 354.587 588.303 321.962 562.392 298.45C564.791 288.373 566.231 278.296 566.231 268.224C566.231 199.611 510.571 148.267 446.274 148.267C433.322 148.267 420.846 150.184 408.37 154.505C386.775 133.392 357.026 119.958 324.4 119.958C266.342 119.958 217.883 161.22 206.843 215.921C153.104 229.837 118.557 280.218 118.557 331.557C118.557 365.146 132.95 397.771 158.861 421.283C156.462 431.36 155.022 441.437 155.022 451.51C155.022 520.123 210.682 571.466 274.978 571.466C287.931 571.466 300.407 569.549 312.883 565.228C334.473 586.341 364.222 599.776 396.852 599.776Z" fill="black"/></g></g>
+<defs><clipPath id="clip0_1637_2934"><rect width="720" height="720" fill="white" transform="translate(0.606934 0.0999756)"/></clipPath><clipPath id="clip1_1637_2934"><rect width="484.139" height="479.818" fill="white" transform="translate(118.557 119.958)"/></clipPath></defs>
+</svg>`
+
 const searchHistoryHTML = `<aside class="history-pane" id="search-history">
   <h2>Search history</h2>
   {{if .History}}
@@ -297,6 +323,11 @@ const searchHistoryHTML = `<aside class="history-pane" id="search-history">
   <div class="history-empty">Your recent searches will appear here.</div>
   {{end}}
 </aside>`
+
+const sourceBadgeHTML = `<span class="badge source-badge source-{{.Source}}">
+  <span class="source-icon-tile">{{if eq .Source "claude-code"}}<span class="source-claude-dot" aria-hidden="true"></span>{{else}}<img class="source-icon" src="/icons/openai.svg" alt="">{{end}}</span>
+  {{sourceName .Source}}
+</span>`
 
 const indexHTML = `<!doctype html>
 <html lang="en">
@@ -313,7 +344,7 @@ const indexHTML = `<!doctype html>
 ` + searchHistoryHTML + `
 <div class="content-pane">
   <h1>LLM Session Search</h1>
-  <div class="subtle">Search local Codex session files.</div>
+  <div class="subtle">Search local Codex and Claude Code sessions.</div>
   <form class="search" action="/" method="get" data-live-search>
     <input name="q" value="{{.Query}}" placeholder="Search sessions" autofocus autocomplete="off">
     <button type="submit">Search</button>
@@ -327,10 +358,11 @@ const indexHTML = `<!doctype html>
     {{range .Hits}}
       <article class="card">
         <div class="card-head">
-          <h2><a href="/sessions/{{.Session.ID}}?q={{urlquery $.Query}}{{if $.FromHistory}}&amp;from_history=1{{end}}">{{if .Session.Title}}{{.Session.Title}}{{else}}{{.Session.ID}}{{end}}</a></h2>
+          <h2><a href="/sessions/{{.Session.Source}}/{{.Session.ID}}?q={{urlquery $.Query}}{{if $.FromHistory}}&amp;from_history=1{{end}}">{{if .Session.Title}}{{.Session.Title}}{{else}}{{.Session.ID}}{{end}}</a></h2>
           <button type="button" class="button-secondary button-small" data-copy-text="{{.Session.Path}}">Copy JSONL Path</button>
         </div>
         <div class="meta">
+          ` + sourceBadgeHTML + `
           {{if .Session.Archived}}<span class="badge archived">archived</span>{{end}}
           {{if .Record.Role}}<span class="badge {{badgeClass .Record.Role}}">{{.Record.Role}}</span>{{end}}
           {{if .Record.Phase}}<span class="badge {{badgeClass .Record.Phase}}">{{.Record.Phase}}</span>{{end}}
@@ -354,10 +386,11 @@ const indexHTML = `<!doctype html>
     {{range .Sessions}}
       <article class="card">
         <div class="card-head">
-          <h2><a href="/sessions/{{.ID}}">{{if .Title}}{{.Title}}{{else}}{{.ID}}{{end}}</a></h2>
+          <h2><a href="/sessions/{{.Source}}/{{.ID}}">{{if .Title}}{{.Title}}{{else}}{{.ID}}{{end}}</a></h2>
           <button type="button" class="button-secondary button-small" data-copy-text="{{.Path}}">Copy JSONL Path</button>
         </div>
         <div class="meta">
+          ` + sourceBadgeHTML + `
           {{if .Archived}}<span class="badge archived">archived</span>{{end}}
           {{if .StartedAtMS.Valid}}<span>started {{formatTime .StartedAtMS}}</span>{{end}}
           {{if .UpdatedAtMS.Valid}}<span>updated {{formatTime .UpdatedAtMS}}</span>{{end}}
@@ -395,6 +428,7 @@ const sessionHTML = `<!doctype html>
     <div>
       <h1>{{if .Session.Title}}{{.Session.Title}}{{else}}{{.Session.ID}}{{end}}</h1>
       <div class="meta">
+        {{with .Session}}` + sourceBadgeHTML + `{{end}}
         {{if .Session.Archived}}<span class="badge archived">archived</span>{{end}}
         {{if .Session.StartedAtMS.Valid}}<span>started {{formatTime .Session.StartedAtMS}}</span>{{end}}
         {{if .Session.UpdatedAtMS.Valid}}<span>updated {{formatTime .Session.UpdatedAtMS}}</span>{{end}}
@@ -408,7 +442,7 @@ const sessionHTML = `<!doctype html>
     </div>
   </header>
 
-  <form class="search" action="/sessions/{{.Session.ID}}" method="get" data-live-search>
+  <form class="search" action="/sessions/{{.Session.Source}}/{{.Session.ID}}" method="get" data-live-search>
     <input name="q" value="{{.Query}}" placeholder="Filter this session" autocomplete="off">
     {{if .FromHistory}}<input type="hidden" name="from_history" value="1">{{end}}
     <button type="submit">Filter</button>

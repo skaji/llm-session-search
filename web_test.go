@@ -39,7 +39,7 @@ func TestWebHandler(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	if _, err := IndexSessions(context.Background(), store, codexHome); err != nil {
+	if _, err := IndexSessions(context.Background(), store, SessionHomes{Codex: codexHome}); err != nil {
 		t.Fatal(err)
 	}
 	handler := NewWebHandler(store)
@@ -47,6 +47,9 @@ func TestWebHandler(t *testing.T) {
 	response := get(t, handler, "/")
 	if !strings.Contains(response.Body.String(), `data-copy-text="`+sessionPath+`"`) ||
 		!strings.Contains(response.Body.String(), `<link rel="icon" href="/favicon.svg" type="image/svg+xml">`) ||
+		!strings.Contains(response.Body.String(), "Search local Codex and Claude Code sessions.") ||
+		!strings.Contains(response.Body.String(), `class="badge source-badge source-codex"`) ||
+		!strings.Contains(response.Body.String(), `src="/icons/openai.svg"`) ||
 		!strings.Contains(response.Body.String(), `id="search-history"`) ||
 		!strings.Contains(response.Body.String(), "Your recent searches will appear here.") {
 		t.Fatalf("recent session copy button missing: status=%d body=%s", response.Code, response.Body.String())
@@ -89,7 +92,7 @@ func TestWebHandler(t *testing.T) {
 		t.Fatalf("selected history was not highlighted: %s", historyHTML)
 	}
 
-	response = get(t, handler, "/sessions/"+testSessionID)
+	response = get(t, handler, "/sessions/"+sourceCodex+"/"+testSessionID)
 	if !strings.Contains(response.Body.String(), "codex://threads/"+testSessionID) {
 		t.Fatalf("Codex deep link missing: %s", response.Body.String())
 	}
@@ -118,14 +121,14 @@ func TestWebHandler(t *testing.T) {
 		}
 	}
 
-	response = get(t, handler, "/sessions/"+testSessionID+"?q="+url.QueryEscape("web text")+"&from_history=1")
+	response = get(t, handler, "/sessions/"+sourceCodex+"/"+testSessionID+"?q="+url.QueryEscape("web text")+"&from_history=1")
 	if !strings.Contains(response.Body.String(), `name="from_history" value="1"`) ||
 		!strings.Contains(response.Body.String(), `class="back" href="/?q=web&#43;text&amp;from_history=1"`) ||
 		!strings.Contains(response.Body.String(), `class="history-link history-link-active"`) {
 		t.Fatalf("history navigation state was not preserved: status=%d body=%s", response.Code, response.Body.String())
 	}
 
-	response = get(t, handler, "/sessions/"+testSessionID+"?q="+url.QueryEscape("web text"))
+	response = get(t, handler, "/sessions/"+sourceCodex+"/"+testSessionID+"?q="+url.QueryEscape("web text"))
 	if !strings.Contains(response.Body.String(), "searchable <mark>web</mark> <mark>text</mark>") {
 		t.Fatalf("session highlight missing: %s", response.Body.String())
 	}
@@ -136,7 +139,7 @@ func TestWebHandler(t *testing.T) {
 		t.Fatalf("internal record was globally searchable: status=%d body=%s", response.Code, response.Body.String())
 	}
 
-	response = get(t, handler, "/sessions/"+testSessionID+"?q="+url.QueryEscape("hidden system"))
+	response = get(t, handler, "/sessions/"+sourceCodex+"/"+testSessionID+"?q="+url.QueryEscape("hidden system"))
 	if !strings.Contains(response.Body.String(), "No records.") {
 		t.Fatalf("system record appeared on session page: status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -157,6 +160,50 @@ func TestWebHandler(t *testing.T) {
 	}
 	if !strings.Contains(response.Body.String(), "<svg") || !strings.Contains(response.Body.String(), "#116b5b") {
 		t.Fatalf("unexpected favicon: %s", response.Body.String())
+	}
+
+	response = get(t, handler, "/icons/openai.svg")
+	if !strings.Contains(response.Body.String(), "<svg") || !strings.Contains(response.Body.String(), `fill="black"`) {
+		t.Fatalf("unexpected OpenAI icon: %s", response.Body.String())
+	}
+}
+
+func TestWebHandlerShowsClaudeCodeSource(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	claudeHome := filepath.Join(root, ".claude")
+	projectDir := filepath.Join(claudeHome, "projects", "-tmp-project")
+	if err := os.MkdirAll(projectDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(projectDir, testSessionID+".jsonl")
+	data := `{"type":"ai-title","aiTitle":"Claude web session","sessionId":"` + testSessionID + `"}
+{"type":"user","sessionId":"` + testSessionID + `","cwd":"/tmp/project","timestamp":"2026-08-29T00:00:00Z","message":{"role":"user","content":"Claude searchable web text"}}
+`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenStore(filepath.Join(root, "index.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if _, err := IndexSessions(context.Background(), store, SessionHomes{ClaudeCode: claudeHome}); err != nil {
+		t.Fatal(err)
+	}
+	handler := NewWebHandler(store)
+
+	response := get(t, handler, "/?q="+url.QueryEscape("Claude searchable"))
+	body := response.Body.String()
+	if !strings.Contains(body, `class="badge source-badge source-claude-code"`) ||
+		!strings.Contains(body, `class="source-claude-dot" aria-hidden="true"`) ||
+		strings.Contains(body, `/icons/claude-code.svg`) ||
+		!strings.Contains(body, `href="/sessions/claude-code/`+testSessionID) {
+		t.Fatalf("Claude Code source badge missing: %s", body)
+	}
+	response = get(t, handler, "/sessions/"+sourceClaudeCode+"/"+testSessionID)
+	if strings.Contains(response.Body.String(), "codex://threads/") {
+		t.Fatalf("Claude Code session received a Codex deep link: %s", response.Body.String())
 	}
 }
 
