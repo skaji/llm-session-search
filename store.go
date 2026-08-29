@@ -484,19 +484,10 @@ func makeSnippet(text string, terms []string, maxRunes int) string {
 		return text
 	}
 
-	index := firstMatchRune(text, terms)
-	if index < 0 {
-		index = 0
-	}
-	start := index - maxRunes/3
-	if start < 0 {
-		start = 0
-	}
-	end := start + maxRunes
-	if end > len(runes) {
-		end = len(runes)
-		start = max(0, end-maxRunes)
-	}
+	index := max(0, firstMatchRune(text, terms))
+	start := max(0, index-maxRunes/3)
+	end := min(start+maxRunes, len(runes))
+	start = max(0, end-maxRunes)
 	prefix := ""
 	suffix := ""
 	if start > 0 {

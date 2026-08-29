@@ -17,7 +17,6 @@ func TestParseSearchQuery(t *testing.T) {
 		{query: `   `},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.query, func(t *testing.T) {
 			t.Parallel()
 			if got := parseSearchQuery(test.query); !reflect.DeepEqual(got, test.want) {

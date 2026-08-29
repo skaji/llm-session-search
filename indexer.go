@@ -628,5 +628,8 @@ func loadSessionTitles(path string) map[string]string {
 			titles[entry.ID] = entry.ThreadName
 		}
 	}
+	if scanner.Err() != nil {
+		return map[string]string{}
+	}
 	return titles
 }
