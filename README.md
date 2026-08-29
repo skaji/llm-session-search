@@ -1,5 +1,7 @@
 # llm-session-search
 
+![LLM Session Search screenshot](maint/screenshot.png)
+
 `llm-session-search` indexes user and assistant messages from local Codex and
 Claude Code JSONL sessions and provides a web interface for finding previous
 conversations. Its best-effort parsers support multiple session schema
