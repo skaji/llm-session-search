@@ -33,6 +33,27 @@ func TestRunRejectsRemovedSubcommands(t *testing.T) {
 	}
 }
 
+func TestRunReportsInitialIndexStart(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	codexHome := filepath.Join(root, "missing-codex-home")
+	dbPath := filepath.Join(root, "data", "index.db")
+	var stdout bytes.Buffer
+
+	err := run([]string{
+		"--codex-home", codexHome,
+		"--db", dbPath,
+		"--index-interval", "0",
+	}, &stdout, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("run() succeeded with a missing Codex home")
+	}
+	want := "Indexing sessions from " + codexHome + "...\n"
+	if stdout.String() != want {
+		t.Fatalf("stdout = %q, want %q", stdout.String(), want)
+	}
+}
+
 func TestOpenIndexedStoreCreatesDatabaseAndIndex(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

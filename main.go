@@ -52,6 +52,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	_, _ = fmt.Fprintf(stdout, "Indexing sessions from %s...\n", *codexHome)
 	started := time.Now()
 	store, stats, err := openIndexedStore(ctx, *codexHome, *dbPath, enforcePermissions)
 	if err != nil {
