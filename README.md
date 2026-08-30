@@ -72,6 +72,17 @@ running. The four daemon options are mutually exclusive. Other options can be
 combined with `--daemon` and `--daemon-restart`; use the same `--data-dir` for
 all later status and control operations.
 
+## Development
+
+Before committing changes, run the repository lint checks:
+
+```console
+bash maint/lint.sh
+```
+
+A successful run is one of the criteria for considering a change ready to
+commit.
+
 ## Search behavior
 
 Space-separated terms use session-level AND semantics, so terms may occur in
