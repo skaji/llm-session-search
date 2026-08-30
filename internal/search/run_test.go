@@ -1,4 +1,4 @@
-package main
+package search
 
 import (
 	"bytes"
@@ -25,7 +25,7 @@ func TestRunRejectsRemovedSubcommands(t *testing.T) {
 		t.Run(command, func(t *testing.T) {
 			t.Parallel()
 			var stderr bytes.Buffer
-			err := run([]string{command}, &bytes.Buffer{}, &stderr)
+			err := Run([]string{command}, "dev", &bytes.Buffer{}, &stderr)
 			if err == nil || !strings.Contains(err.Error(), "subcommands are not supported") {
 				t.Fatalf("run(%q) error = %v, stderr = %q", command, err, stderr.String())
 			}
@@ -36,10 +36,10 @@ func TestRunRejectsRemovedSubcommands(t *testing.T) {
 func TestRunVersionDoesNotStartDaemon(t *testing.T) {
 	t.Parallel()
 	var stdout bytes.Buffer
-	if err := run([]string{"--daemon", "--version"}, &stdout, &bytes.Buffer{}); err != nil {
+	if err := Run([]string{"--daemon", "--version"}, "test-version", &stdout, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	if stdout.String() != version+"\n" {
+	if stdout.String() != "test-version\n" {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
 }
@@ -47,7 +47,7 @@ func TestRunVersionDoesNotStartDaemon(t *testing.T) {
 func TestRunRejectsDBOption(t *testing.T) {
 	t.Parallel()
 	var stderr bytes.Buffer
-	err := run([]string{"--db", filepath.Join(t.TempDir(), "index.db")}, &bytes.Buffer{}, &stderr)
+	err := Run([]string{"--db", filepath.Join(t.TempDir(), "index.db")}, "dev", &bytes.Buffer{}, &stderr)
 	if err == nil || !strings.Contains(err.Error(), "flag provided but not defined: -db") {
 		t.Fatalf("run() error = %v, stderr = %q", err, stderr.String())
 	}
@@ -55,7 +55,7 @@ func TestRunRejectsDBOption(t *testing.T) {
 
 func TestRunRejectsMultipleDaemonOperations(t *testing.T) {
 	t.Parallel()
-	err := run([]string{"--daemon", "--daemon-stop"}, &bytes.Buffer{}, &bytes.Buffer{})
+	err := Run([]string{"--daemon", "--daemon-stop"}, "dev", &bytes.Buffer{}, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Fatalf("run() error = %v", err)
 	}
@@ -85,12 +85,12 @@ func TestRunReportsAbsoluteSessionHome(t *testing.T) {
 	t.Parallel()
 
 	var stdout bytes.Buffer
-	err := run([]string{
+	err := Run([]string{
 		"--codex-home", "missing-relative-codex-home",
 		"--claude-home=",
 		"--data-dir", filepath.Join(t.TempDir(), "data"),
 		"--index-interval", "0",
-	}, &stdout, &bytes.Buffer{})
+	}, "dev", &stdout, &bytes.Buffer{})
 	if err == nil {
 		t.Fatal("run() succeeded with a missing Codex home")
 	}
@@ -111,12 +111,12 @@ func TestRunReportsInitialIndexStart(t *testing.T) {
 	dataDir := filepath.Join(root, "data")
 	var stdout bytes.Buffer
 
-	err := run([]string{
+	err := Run([]string{
 		"--codex-home", codexHome,
 		"--claude-home=",
 		"--data-dir", dataDir,
 		"--index-interval", "0",
-	}, &stdout, &bytes.Buffer{})
+	}, "dev", &stdout, &bytes.Buffer{})
 	if err == nil {
 		t.Fatal("run() succeeded with a missing Codex home")
 	}
