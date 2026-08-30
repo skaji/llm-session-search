@@ -308,7 +308,7 @@ mark { padding: 0 2px; border-radius: 3px; background: #ffe169; color: #25200b; 
 .session-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
 .session-head h1 { overflow-wrap: anywhere; }
 .record { margin: 12px 0; }
-.record pre { margin: 10px 0 0; max-height: 420px; overflow: auto; padding: 15px; border-radius: 8px; background: #f6f5f1; color: #24231f; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.record pre { margin: 10px 0 0; padding: 15px; border-radius: 8px; background: #f6f5f1; color: #24231f; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .back { display: inline-block; margin-bottom: 22px; text-decoration: none; }
 .empty { padding: 40px 0; text-align: center; color: #77736c; }
 @media (max-width: 860px) {

@@ -456,7 +456,6 @@ func (s *Store) SessionRecords(ctx context.Context, sessionKey int64, query stri
 		if err := rows.Scan(&record.LineNumber, &record.TimestampMS, &record.Role, &record.Phase, &record.Text); err != nil {
 			return nil, err
 		}
-		record.Text = makeSnippet(record.Text, terms, 600)
 		records = append(records, record)
 	}
 	return records, rows.Err()

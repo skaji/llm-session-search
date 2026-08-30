@@ -22,10 +22,12 @@ func TestWebHandler(t *testing.T) {
 	}
 	filename := "rollout-2026-08-29T09-00-00-" + testSessionID + ".jsonl"
 	sessionPath := filepath.Join(sessionDir, filename)
+	longText := strings.Repeat("full record ", 80) + "final tail marker"
 	data := `{"timestamp":"2026-08-29T00:00:00Z","role":"user","message":"searchable web text <script>alert(1)</script>"}
 {"timestamp":"2026-08-29T00:00:01Z","role":"system","message":"hidden system instruction"}
 {"timestamp":"2026-08-29T00:00:02Z","type":"function_call_output","message":"hidden tool output"}
 {"timestamp":"2026-08-29T00:00:03Z","type":"response_item","payload":{"type":"message","id":"msg_internal","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"visible assistant reply"}]}}
+` + `{"timestamp":"2026-08-29T00:00:04Z","role":"assistant","message":"` + longText + `"}
 `
 	if err := os.WriteFile(sessionPath, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
@@ -144,6 +146,12 @@ func TestWebHandler(t *testing.T) {
 	}
 	if !strings.Contains(response.Body.String(), `data-copy-text="`+sessionPath+`"`) {
 		t.Fatalf("session copy button missing: %s", response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "final tail marker") {
+		t.Fatalf("session record was truncated: %s", response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "max-height: 420px") {
+		t.Fatalf("session records still have a fixed maximum height: %s", response.Body.String())
 	}
 	if !strings.Contains(response.Body.String(), `href="/?q=web&#43;text&amp;from_history=1"`) {
 		t.Fatalf("session page search history missing: %s", response.Body.String())
