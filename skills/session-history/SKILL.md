@@ -37,5 +37,5 @@ Space-separated terms have session-level AND semantics and may occur in differen
 
 - Treat session files and the search index as sensitive, read-only data.
 - Do not start, stop, or restart the search server.
-- If the endpoint is unavailable or returns an error, report that condition. Inspect the implementation at `~/src/github.com/skaji/llm-session-search` only when the user asks to diagnose it.
+- If the endpoint is unavailable or returns an error, report that condition. Inspect the implementation at [skaji/llm-session-search](https://github.com/skaji/llm-session-search) only when the user asks to diagnose it.
 - Do not substitute Git history, current terminal output, or web search for conversation history unless the user separately asks for those sources.
