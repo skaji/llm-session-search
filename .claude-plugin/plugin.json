@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "llm-session-search",
+  "displayName": "LLM Session Search",
+  "version": "0.1.0",
+  "description": "Search local Codex and Claude session history.",
+  "author": {
+    "name": "Shoichi Kaji",
+    "email": "skaji@cpan.org",
+    "url": "https://github.com/skaji"
+  },
+  "homepage": "https://github.com/skaji/llm-session-search",
+  "repository": "https://github.com/skaji/llm-session-search",
+  "license": "MIT",
+  "keywords": ["codex", "claude", "session-history", "search"],
+  "skills": "./skills/"
+}
