@@ -175,7 +175,7 @@ func (app *webApp) session(w http.ResponseWriter, r *http.Request) {
 	}
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
 	fromHistory := r.URL.Query().Get("from_history") == "1"
-	shorten := r.URL.Query().Get("shorten") != "0"
+	shorten := r.URL.Query().Get("shorten") == "1"
 	records, err := app.store.SessionRecords(r.Context(), session.Key, query, 500)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -418,7 +418,7 @@ const indexHTML = `<!doctype html>
     {{range .Hits}}
       <article class="card">
         <div class="card-head">
-          <h2><a href="/sessions/{{.Session.Source}}/{{.Session.ID}}?q={{urlquery $.Query}}{{if $.FromHistory}}&amp;from_history=1{{end}}">{{if .Session.Title}}{{.Session.Title}}{{else}}{{.Session.ID}}{{end}}</a></h2>
+          <h2><a href="/sessions/{{.Session.Source}}/{{.Session.ID}}?q={{urlquery $.Query}}&amp;shorten=1{{if $.FromHistory}}&amp;from_history=1{{end}}">{{if .Session.Title}}{{.Session.Title}}{{else}}{{.Session.ID}}{{end}}</a></h2>
           <div class="card-actions">
             {{with sessionAppLink .Session.Source .Session.ID}}<a class="button button-small" href="{{.URL}}">{{.Label}}</a>{{end}}
             <span class="copy-control">
@@ -452,7 +452,7 @@ const indexHTML = `<!doctype html>
     {{range .Sessions}}
       <article class="card">
         <div class="card-head">
-          <h2><a href="/sessions/{{.Source}}/{{.ID}}">{{if .Title}}{{.Title}}{{else}}{{.ID}}{{end}}</a></h2>
+          <h2><a href="/sessions/{{.Source}}/{{.ID}}?shorten=1">{{if .Title}}{{.Title}}{{else}}{{.ID}}{{end}}</a></h2>
           <div class="card-actions">
             {{with sessionAppLink .Source .ID}}<a class="button button-small" href="{{.URL}}">{{.Label}}</a>{{end}}
             <span class="copy-control">
@@ -526,7 +526,6 @@ const sessionHTML = `<!doctype html>
     <button type="submit">Filter</button>
     <div class="session-options">
       <label><input type="checkbox" name="shorten" value="1"{{if .Shorten}} checked{{end}}> Shorten long records</label>
-      <input type="hidden" name="shorten" value="0">
     </div>
   </form>
   <div class="live-status" role="status" aria-live="polite"></div>
@@ -616,7 +615,11 @@ const appJS = `(() => {
       target.searchParams.set("q", query);
     }
     if (shortenCheckbox) {
-      target.searchParams.set("shorten", shortenCheckbox.checked ? "1" : "0");
+      if (shortenCheckbox.checked) {
+        target.searchParams.set("shorten", "1");
+      } else {
+        target.searchParams.delete("shorten");
+      }
     }
     return target;
   }

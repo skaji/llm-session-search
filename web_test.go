@@ -89,7 +89,8 @@ func TestWebHandler(t *testing.T) {
 		!strings.Contains(response.Body.String(), `class="badge source-badge source-codex"`) ||
 		!strings.Contains(response.Body.String(), `src="/icons/openai.svg"`) ||
 		!strings.Contains(response.Body.String(), `id="search-history"`) ||
-		!strings.Contains(response.Body.String(), "Your recent searches will appear here.") {
+		!strings.Contains(response.Body.String(), "Your recent searches will appear here.") ||
+		!strings.Contains(response.Body.String(), `href="/sessions/`+sourceCodex+`/`+testSessionID+`?shorten=1"`) {
 		t.Fatalf("recent session copy button missing: status=%d body=%s", response.Code, response.Body.String())
 	}
 
@@ -99,6 +100,9 @@ func TestWebHandler(t *testing.T) {
 	}
 	if !strings.Contains(response.Body.String(), `data-copy-text="`+sessionPath+`"`) {
 		t.Fatalf("search result copy button missing: %s", response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `href="/sessions/`+sourceCodex+`/`+testSessionID+`?q=web&#43;text&amp;shorten=1"`) {
+		t.Fatalf("search result did not enable record shortening: %s", response.Body.String())
 	}
 	if !strings.Contains(response.Body.String(), `href="codex://threads/`+testSessionID+`"`) ||
 		!strings.Contains(response.Body.String(), `>Open in Codex</a>`) ||
@@ -135,6 +139,9 @@ func TestWebHandler(t *testing.T) {
 	if !strings.Contains(historyHTML, `class="history-link history-link-active" href="/?q=web&#43;text&amp;from_history=1" title="web text" aria-current="page"`) {
 		t.Fatalf("selected history was not highlighted: %s", historyHTML)
 	}
+	if !strings.Contains(historyHTML, `href="/sessions/`+sourceCodex+`/`+testSessionID+`?q=web&#43;text&amp;shorten=1&amp;from_history=1"`) {
+		t.Fatalf("history search result did not preserve navigation state: %s", historyHTML)
+	}
 
 	response = get(t, handler, "/sessions/"+sourceCodex+"/"+testSessionID)
 	if !strings.Contains(response.Body.String(), "codex://threads/"+testSessionID) ||
@@ -147,25 +154,25 @@ func TestWebHandler(t *testing.T) {
 	if !strings.Contains(response.Body.String(), `data-copy-text="`+sessionPath+`"`) {
 		t.Fatalf("session copy button missing: %s", response.Body.String())
 	}
-	if strings.Contains(response.Body.String(), "final tail marker") ||
-		!strings.Contains(response.Body.String(), "…") {
-		t.Fatalf("session record was not shortened by default: %s", response.Body.String())
+	if !strings.Contains(response.Body.String(), "final tail marker") {
+		t.Fatalf("direct session record was shortened: %s", response.Body.String())
 	}
-	if !strings.Contains(response.Body.String(), `name="shorten" value="1" checked`) ||
-		!strings.Contains(response.Body.String(), `type="hidden" name="shorten" value="0"`) {
+	if !strings.Contains(response.Body.String(), `name="shorten" value="1"`) ||
+		strings.Contains(response.Body.String(), `name="shorten" value="1" checked`) {
 		t.Fatalf("shorten checkbox default is incorrect: %s", response.Body.String())
 	}
 	if strings.Contains(response.Body.String(), "max-height: 420px") {
 		t.Fatalf("session records still have a fixed maximum height: %s", response.Body.String())
 	}
 
-	response = get(t, handler, "/sessions/"+sourceCodex+"/"+testSessionID+"?shorten=0")
-	if !strings.Contains(response.Body.String(), "final tail marker") ||
-		strings.Contains(response.Body.String(), `name="shorten" value="1" checked`) {
-		t.Fatalf("full session records were not restored: %s", response.Body.String())
+	response = get(t, handler, "/sessions/"+sourceCodex+"/"+testSessionID+"?shorten=1")
+	if strings.Contains(response.Body.String(), "final tail marker") ||
+		!strings.Contains(response.Body.String(), "…") ||
+		!strings.Contains(response.Body.String(), `name="shorten" value="1" checked`) {
+		t.Fatalf("session records were not shortened: %s", response.Body.String())
 	}
 	if strings.Contains(response.Body.String(), "max-height: 420px") {
-		t.Fatalf("full session records have a fixed maximum height: %s", response.Body.String())
+		t.Fatalf("shortened session records have a fixed maximum height: %s", response.Body.String())
 	}
 	if !strings.Contains(response.Body.String(), `href="/?q=web&#43;text&amp;from_history=1"`) {
 		t.Fatalf("session page search history missing: %s", response.Body.String())
