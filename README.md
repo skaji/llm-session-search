@@ -3,7 +3,7 @@
 ![LLM Session Search screenshot](maint/screenshot.png)
 
 `llm-session-search` indexes user and assistant messages from local Codex and
-Claude Code JSONL sessions and provides a web interface for finding previous
+Claude JSONL sessions and provides a web interface for finding previous
 conversations. Its best-effort parsers support multiple session schema
 generations.
 
@@ -20,13 +20,13 @@ updates `~/.llm-session-search/index.db` from:
 - `~/.codex/sessions/**/*.jsonl`
 - `~/.codex/archived_sessions/**/*.jsonl`
 
-and from main Claude Code transcripts under:
+and from main Claude transcripts under:
 
 - `${CLAUDE_CONFIG_DIR:-~/.claude}/projects/*/*.jsonl`
 
 It then updates the index every minute. Unchanged files are skipped, append-only
 updates resume from the previous offset, and source files are never modified.
-Claude Code subagent transcripts are not indexed.
+Claude subagent transcripts are not indexed.
 
 The index database has no schema migration support. After an update that changes
 the schema or indexed content, stop the process, delete `index.db`, and restart
@@ -101,21 +101,22 @@ optional `cwd` parameter limits results to that working directory and its
 descendants. Each matching record identifies its `matched_terms`; records that
 match more terms are returned first, followed by user messages and newer
 records.
-Codex results also include their `codex://threads/<session-id>` URL. Use
+Codex results also include their `codex://threads/<session-id>` URL, and Claude
+results include their `claude://resume?session=<session-id>` URL. Use
 `offset` with the returned `next_offset` to fetch another page. API searches do
 not update the web interface's search history.
 
 The left pane stores the 50 most recent distinct global queries. Session pages
-show their Codex or Claude Code source alongside role and phase badges and can
-copy the current JSONL path. Codex sessions also provide a
-`codex://threads/<session-id>` link. System, developer, tool, thinking, and
-other internal records are neither indexed nor displayed. Encrypted content,
+show their Codex or Claude source alongside role and phase badges and can
+copy the current JSONL path. Sessions can also be opened in their respective
+desktop app. System, developer, tool, thinking, and other internal records are
+neither indexed nor displayed. Encrypted content,
 base64 data URLs, automatically injected AGENTS.md, plugin, environment context,
-Claude Code system reminders, and local commands are also excluded.
+Claude system reminders, and local commands are also excluded.
 
 ## Privacy
 
 The web server listens on `127.0.0.1` by default and uses no external assets.
 The data directory is created with mode `0700`, and the SQLite database uses
 mode `0600`. The database still contains extracted text from local Codex and
-Claude Code sessions and should be treated as sensitive.
+Claude sessions and should be treated as sensitive.

@@ -39,16 +39,21 @@ type sessionPage struct {
 	Session     Session
 	Query       string
 	Records     []Record
-	CodexURL    template.URL
 	History     []string
 	FromHistory bool
 }
 
+type appLink struct {
+	URL   template.URL
+	Label string
+}
+
 func NewWebHandler(store *Store) http.Handler {
 	functions := template.FuncMap{
-		"formatTime": unixMilliString,
-		"formatSize": formatSize,
-		"sourceName": sourceName,
+		"formatTime":     unixMilliString,
+		"formatSize":     formatSize,
+		"sourceName":     sourceName,
+		"sessionAppLink": sessionAppLink,
 		"highlight": func(text, query string) []textPart {
 			return highlightText(text, parseSearchQuery(query))
 		},
@@ -73,8 +78,8 @@ func sourceName(source string) string {
 	switch source {
 	case sourceCodex:
 		return "Codex"
-	case sourceClaudeCode:
-		return "Claude Code"
+	case sourceClaude:
+		return "Claude"
 	default:
 		return source
 	}
@@ -186,12 +191,29 @@ func (app *webApp) session(w http.ResponseWriter, r *http.Request) {
 		History:     history,
 		FromHistory: fromHistory,
 	}
-	if source == sourceCodex && uuidPattern.MatchString(id) {
-		page.CodexURL = template.URL("codex://threads/" + id)
-	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := app.sessionTemplate.Execute(w, page); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func sessionAppLink(source, id string) *appLink {
+	if matchedID := uuidPattern.FindString(id); matchedID == "" || matchedID != id {
+		return nil
+	}
+	switch source {
+	case sourceCodex:
+		return &appLink{
+			URL:   template.URL("codex://threads/" + id),
+			Label: "Open in Codex",
+		}
+	case sourceClaude:
+		return &appLink{
+			URL:   template.URL("claude://resume?session=" + id),
+			Label: "Open in Claude",
+		}
+	default:
+		return nil
 	}
 }
 
@@ -247,13 +269,22 @@ a { color: #0c6959; }
 h1 { margin: 0 0 8px; font-size: 30px; letter-spacing: -0.03em; }
 .subtle { color: #66645f; font-size: 14px; }
 .search { display: flex; flex-wrap: wrap; gap: 8px; margin: 28px 0 6px; }
-.search input { flex: 1; min-width: 0; padding: 13px 15px; border: 1px solid #c8c5bd; border-radius: 9px; background: #fff; color: #20201e; font-size: 16px; }
+.query-field { position: relative; flex: 1; min-width: 0; }
+.search input { width: 100%; padding: 13px 44px 13px 15px; border: 1px solid #c8c5bd; border-radius: 9px; background: #fff; color: #20201e; font-size: 16px; }
+.query-clear { position: absolute; top: 50%; right: 8px; width: 32px; height: 32px; padding: 0; transform: translateY(-50%); border-radius: 999px; background: transparent; color: #77736c; font-size: 22px; font-weight: 400; line-height: 1; }
+.query-clear:hover { background: #ebe9e3; color: #20201e; }
+.query-clear[hidden] { display: none; }
 .live-status { min-height: 20px; margin: 0 0 20px; color: #66645f; font-size: 13px; }
 button, .button { display: inline-block; padding: 11px 16px; border: 0; border-radius: 9px; background: #116b5b; color: #fff; font-weight: 650; text-decoration: none; cursor: pointer; }
 button:disabled { cursor: default; opacity: 0.7; }
 .button-row { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .button-secondary { background: #e4e9e6; color: #28554c; }
 .button-small { flex: none; padding: 6px 10px; font-size: 12px; }
+.card-actions { display: flex; flex: none; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.copy-control { position: relative; display: inline-flex; }
+.copy-feedback { position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 1; padding: 5px 8px; border-radius: 6px; background: #252622; color: #fff; font-size: 12px; font-weight: 650; line-height: 1.2; opacity: 0; pointer-events: none; transform: translateY(3px); transition: opacity 120ms ease, transform 120ms ease; white-space: nowrap; }
+.copy-feedback::after { position: absolute; top: 100%; right: 14px; border: 5px solid transparent; border-top-color: #252622; content: ""; }
+.copy-feedback-visible { opacity: 1; transform: translateY(0); }
 .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .card-head h2 { min-width: 0; overflow-wrap: anywhere; }
 .list { display: grid; gap: 12px; }
@@ -271,7 +302,7 @@ mark { padding: 0 2px; border-radius: 3px; background: #ffe169; color: #25200b; 
 .source-icon-tile { display: inline-grid; width: 18px; height: 18px; place-items: center; border-radius: 999px; background: #fff; }
 .source-icon { display: block; width: 13px; height: 13px; }
 .source-claude-dot { width: 12px; height: 12px; border-radius: 50%; background: #d97757; }
-.source-claude-code { background: #f8e6df; color: #85452f; }
+.source-claude { background: #f8e6df; color: #85452f; }
 .archived { background: #f2e4d5; color: #84522a; }
 .pager { display: flex; justify-content: space-between; margin-top: 22px; }
 .session-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
@@ -280,10 +311,23 @@ mark { padding: 0 2px; border-radius: 3px; background: #ffe169; color: #25200b; 
 .record pre { margin: 10px 0 0; max-height: 420px; overflow: auto; padding: 15px; border-radius: 8px; background: #f6f5f1; color: #24231f; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .back { display: inline-block; margin-bottom: 22px; text-decoration: none; }
 .empty { padding: 40px 0; text-align: center; color: #77736c; }
+@media (max-width: 860px) {
+  main { width: min(100% - 32px, 720px); padding-top: 24px; }
+  .app-shell { grid-template-columns: minmax(0, 1fr); gap: 24px; }
+  .history-pane { position: static; max-height: 240px; }
+  .session-head, .card-head { flex-direction: column; }
+  .button-row, .card-actions { justify-content: flex-start; }
+}
+@media (max-width: 520px) {
+  .search { flex-direction: column; }
+  .search > button { width: 100%; }
+}
 @media (prefers-color-scheme: dark) {
   body { background: #191a18; color: #edede8; }
   .card, .history-pane { background: #222320; border-color: #3b3c38; }
   .search input { background: #222320; color: #edede8; border-color: #4c4d48; }
+  .query-clear { color: #aaa9a2; }
+  .query-clear:hover { background: #363732; color: #edede8; }
   .subtle, .meta, .live-status { color: #aaa9a2; }
   .record pre { background: #171815; color: #e8e8e2; }
   .button-secondary { background: #38423e; color: #b9e1d8; }
@@ -293,7 +337,7 @@ mark { padding: 0 2px; border-radius: 3px; background: #ffe169; color: #25200b; 
   .badge-commentary { background: #4c381a; color: #ffd99a; }
   .badge-final-answer { background: #403050; color: #ddc5f6; }
   .source-codex { background: #3b3c38; color: #edede8; }
-  .source-claude-code { background: #523126; color: #f1b39d; }
+  .source-claude { background: #523126; color: #f1b39d; }
   mark { background: #8a6c00; color: #fff4bd; }
   a { color: #66cbb6; }
   .history-link { color: #d0cfc8; }
@@ -326,7 +370,7 @@ const searchHistoryHTML = `<aside class="history-pane" id="search-history">
 </aside>`
 
 const sourceBadgeHTML = `<span class="badge source-badge source-{{.Source}}">
-  <span class="source-icon-tile">{{if eq .Source "claude-code"}}<span class="source-claude-dot" aria-hidden="true"></span>{{else}}<img class="source-icon" src="/icons/openai.svg" alt="">{{end}}</span>
+  <span class="source-icon-tile">{{if eq .Source "claude"}}<span class="source-claude-dot" aria-hidden="true"></span>{{else}}<img class="source-icon" src="/icons/openai.svg" alt="">{{end}}</span>
   {{sourceName .Source}}
 </span>`
 
@@ -345,9 +389,12 @@ const indexHTML = `<!doctype html>
 ` + searchHistoryHTML + `
 <div class="content-pane">
   <h1>LLM Session Search</h1>
-  <div class="subtle">Search local Codex and Claude Code sessions.</div>
+  <div class="subtle">Search local Codex and Claude sessions.</div>
   <form class="search" action="/" method="get" data-live-search>
-    <input name="q" value="{{.Query}}" placeholder="Search sessions" autofocus autocomplete="off">
+    <div class="query-field">
+      <input name="q" value="{{.Query}}" placeholder="Search sessions" autofocus autocomplete="off">
+      <button type="button" class="query-clear" data-clear-query aria-label="Clear search"{{if not .Query}} hidden{{end}}>×</button>
+    </div>
     <button type="submit">Search</button>
   </form>
   <div class="live-status" role="status" aria-live="polite"></div>
@@ -360,7 +407,13 @@ const indexHTML = `<!doctype html>
       <article class="card">
         <div class="card-head">
           <h2><a href="/sessions/{{.Session.Source}}/{{.Session.ID}}?q={{urlquery $.Query}}{{if $.FromHistory}}&amp;from_history=1{{end}}">{{if .Session.Title}}{{.Session.Title}}{{else}}{{.Session.ID}}{{end}}</a></h2>
-          <button type="button" class="button-secondary button-small" data-copy-text="{{.Session.Path}}">Copy JSONL Path</button>
+          <div class="card-actions">
+            {{with sessionAppLink .Session.Source .Session.ID}}<a class="button button-small" href="{{.URL}}">{{.Label}}</a>{{end}}
+            <span class="copy-control">
+              <button type="button" class="button-secondary button-small" data-copy-text="{{.Session.Path}}">Copy JSONL Path</button>
+              <span class="copy-feedback" role="status" aria-live="polite"></span>
+            </span>
+          </div>
         </div>
         <div class="meta">
           ` + sourceBadgeHTML + `
@@ -388,7 +441,13 @@ const indexHTML = `<!doctype html>
       <article class="card">
         <div class="card-head">
           <h2><a href="/sessions/{{.Source}}/{{.ID}}">{{if .Title}}{{.Title}}{{else}}{{.ID}}{{end}}</a></h2>
-          <button type="button" class="button-secondary button-small" data-copy-text="{{.Path}}">Copy JSONL Path</button>
+          <div class="card-actions">
+            {{with sessionAppLink .Source .ID}}<a class="button button-small" href="{{.URL}}">{{.Label}}</a>{{end}}
+            <span class="copy-control">
+              <button type="button" class="button-secondary button-small" data-copy-text="{{.Path}}">Copy JSONL Path</button>
+              <span class="copy-feedback" role="status" aria-live="polite"></span>
+            </span>
+          </div>
         </div>
         <div class="meta">
           ` + sourceBadgeHTML + `
@@ -438,13 +497,19 @@ const sessionHTML = `<!doctype html>
       <div class="subtle" style="margin-top:8px">{{.Session.ID}}{{if .Session.CWD}} · {{.Session.CWD}}{{end}}</div>
     </div>
     <div class="button-row">
-      {{if .CodexURL}}<a class="button" href="{{.CodexURL}}">Open in ChatGPT</a>{{end}}
-      <button type="button" class="button-secondary" data-copy-text="{{.Session.Path}}">Copy JSONL Path</button>
+      {{with sessionAppLink .Session.Source .Session.ID}}<a class="button" href="{{.URL}}">{{.Label}}</a>{{end}}
+      <span class="copy-control">
+        <button type="button" class="button-secondary" data-copy-text="{{.Session.Path}}">Copy JSONL Path</button>
+        <span class="copy-feedback" role="status" aria-live="polite"></span>
+      </span>
     </div>
   </header>
 
   <form class="search" action="/sessions/{{.Session.Source}}/{{.Session.ID}}" method="get" data-live-search>
-    <input name="q" value="{{.Query}}" placeholder="Filter this session" autocomplete="off">
+    <div class="query-field">
+      <input name="q" value="{{.Query}}" placeholder="Filter this session" autocomplete="off">
+      <button type="button" class="query-clear" data-clear-query aria-label="Clear filter"{{if not .Query}} hidden{{end}}>×</button>
+    </div>
     {{if .FromHistory}}<input type="hidden" name="from_history" value="1">{{end}}
     <button type="submit">Filter</button>
   </form>
@@ -471,22 +536,32 @@ const sessionHTML = `<!doctype html>
 </html>`
 
 const appJS = `(() => {
+  const copyTimers = new WeakMap();
+
+  function showCopyFeedback(button, message) {
+    const feedback = button.parentElement?.querySelector(".copy-feedback");
+    if (!feedback) return;
+
+    const previousTimer = copyTimers.get(feedback);
+    if (previousTimer) window.clearTimeout(previousTimer);
+    feedback.textContent = message;
+    feedback.classList.add("copy-feedback-visible");
+    copyTimers.set(feedback, window.setTimeout(() => {
+      feedback.classList.remove("copy-feedback-visible");
+      copyTimers.delete(feedback);
+    }, 1500));
+  }
+
   async function copyText(button) {
     const text = button.dataset.copyText;
-    if (!text || button.disabled) return;
+    if (!text) return;
 
-    const originalLabel = button.textContent;
-    button.disabled = true;
     try {
       await navigator.clipboard.writeText(text);
-      button.textContent = "Copied";
+      showCopyFeedback(button, "Copied");
     } catch (_) {
-      button.textContent = "Copy failed";
+      showCopyFeedback(button, "Copy failed");
     }
-    window.setTimeout(() => {
-      button.textContent = originalLabel;
-      button.disabled = false;
-    }, 1500);
   }
 
   document.addEventListener("click", (event) => {
@@ -496,6 +571,7 @@ const appJS = `(() => {
 
   const form = document.querySelector("form[data-live-search]");
   const input = form?.querySelector('input[name="q"]');
+  const clearButton = form?.querySelector("[data-clear-query]");
   const status = document.querySelector(".live-status");
   let results = document.querySelector("#results");
   let history = document.querySelector("#search-history");
@@ -504,6 +580,10 @@ const appJS = `(() => {
   let timer;
   let controller;
   let composing = false;
+
+  function updateClearButton() {
+    if (clearButton) clearButton.hidden = input.value === "";
+  }
 
   function cancelPending() {
     window.clearTimeout(timer);
@@ -615,9 +695,13 @@ const appJS = `(() => {
   });
   input.addEventListener("compositionend", () => {
     composing = false;
+    updateClearButton();
     scheduleSearch();
   });
-  input.addEventListener("input", scheduleSearch);
+  input.addEventListener("input", () => {
+    updateClearButton();
+    scheduleSearch();
+  });
   input.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.isComposing && !composing) {
       event.preventDefault();
@@ -625,5 +709,12 @@ const appJS = `(() => {
       form.requestSubmit();
     }
   });
+  clearButton?.addEventListener("click", () => {
+    input.value = "";
+    updateClearButton();
+    input.focus();
+    void runSearch();
+  });
   form.addEventListener("submit", cancelPending);
+  updateClearButton();
 })();`

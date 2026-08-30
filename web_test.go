@@ -78,8 +78,12 @@ func TestWebHandler(t *testing.T) {
 
 	response = get(t, handler, "/")
 	if !strings.Contains(response.Body.String(), `data-copy-text="`+sessionPath+`"`) ||
+		!strings.Contains(response.Body.String(), `href="codex://threads/`+testSessionID+`"`) ||
+		!strings.Contains(response.Body.String(), `>Open in Codex</a>`) ||
+		!strings.Contains(response.Body.String(), `class="copy-feedback" role="status" aria-live="polite"`) ||
+		!strings.Contains(response.Body.String(), `data-clear-query aria-label="Clear search" hidden`) ||
 		!strings.Contains(response.Body.String(), `<link rel="icon" href="/favicon.svg" type="image/svg+xml">`) ||
-		!strings.Contains(response.Body.String(), "Search local Codex and Claude Code sessions.") ||
+		!strings.Contains(response.Body.String(), "Search local Codex and Claude sessions.") ||
 		!strings.Contains(response.Body.String(), `class="badge source-badge source-codex"`) ||
 		!strings.Contains(response.Body.String(), `src="/icons/openai.svg"`) ||
 		!strings.Contains(response.Body.String(), `id="search-history"`) ||
@@ -93,6 +97,12 @@ func TestWebHandler(t *testing.T) {
 	}
 	if !strings.Contains(response.Body.String(), `data-copy-text="`+sessionPath+`"`) {
 		t.Fatalf("search result copy button missing: %s", response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `href="codex://threads/`+testSessionID+`"`) ||
+		!strings.Contains(response.Body.String(), `>Open in Codex</a>`) ||
+		!strings.Contains(response.Body.String(), `data-clear-query aria-label="Clear search"`) ||
+		strings.Contains(response.Body.String(), `data-clear-query aria-label="Clear search" hidden`) {
+		t.Fatalf("search result actions missing: %s", response.Body.String())
 	}
 	if !strings.Contains(response.Body.String(), `href="/?q=web&#43;text&amp;from_history=1"`) {
 		t.Fatalf("search history missing: %s", response.Body.String())
@@ -125,8 +135,12 @@ func TestWebHandler(t *testing.T) {
 	}
 
 	response = get(t, handler, "/sessions/"+sourceCodex+"/"+testSessionID)
-	if !strings.Contains(response.Body.String(), "codex://threads/"+testSessionID) {
+	if !strings.Contains(response.Body.String(), "codex://threads/"+testSessionID) ||
+		!strings.Contains(response.Body.String(), `>Open in Codex</a>`) {
 		t.Fatalf("Codex deep link missing: %s", response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `data-clear-query aria-label="Clear filter" hidden`) {
+		t.Fatalf("empty session filter clear button missing: %s", response.Body.String())
 	}
 	if !strings.Contains(response.Body.String(), `data-copy-text="`+sessionPath+`"`) {
 		t.Fatalf("session copy button missing: %s", response.Body.String())
@@ -161,7 +175,9 @@ func TestWebHandler(t *testing.T) {
 	}
 
 	response = get(t, handler, "/sessions/"+sourceCodex+"/"+testSessionID+"?q="+url.QueryEscape("web text"))
-	if !strings.Contains(response.Body.String(), "searchable <mark>web</mark> <mark>text</mark>") {
+	if !strings.Contains(response.Body.String(), "searchable <mark>web</mark> <mark>text</mark>") ||
+		!strings.Contains(response.Body.String(), `data-clear-query aria-label="Clear filter"`) ||
+		strings.Contains(response.Body.String(), `data-clear-query aria-label="Clear filter" hidden`) {
 		t.Fatalf("session highlight missing: %s", response.Body.String())
 	}
 
@@ -180,10 +196,13 @@ func TestWebHandler(t *testing.T) {
 	if contentType := response.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "text/javascript") {
 		t.Fatalf("content type = %q", contentType)
 	}
-	for _, expected := range []string{"navigator.clipboard", `closest("[data-copy-text]")`, "AbortController", "compositionstart", "searchTerms", "form.requestSubmit()", "new FormData(form)", "nextHistory", "#search-history", "setTimeout(() => void runSearch(), 500)"} {
+	for _, expected := range []string{"navigator.clipboard", `closest("[data-copy-text]")`, "copy-feedback-visible", "data-clear-query", `input.value = ""`, "AbortController", "compositionstart", "searchTerms", "form.requestSubmit()", "new FormData(form)", "nextHistory", "#search-history", "setTimeout(() => void runSearch(), 500)"} {
 		if !strings.Contains(response.Body.String(), expected) {
 			t.Fatalf("app.js is missing %q", expected)
 		}
+	}
+	if strings.Contains(response.Body.String(), "button.textContent") {
+		t.Fatalf("app.js still changes the copy button label: %s", response.Body.String())
 	}
 
 	response = get(t, handler, "/favicon.svg")
@@ -358,7 +377,7 @@ func TestSearchAPIMatchOrdering(t *testing.T) {
 	}
 }
 
-func TestWebHandlerShowsClaudeCodeSource(t *testing.T) {
+func TestWebHandlerShowsClaudeSource(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	claudeHome := filepath.Join(root, ".claude")
@@ -378,22 +397,47 @@ func TestWebHandlerShowsClaudeCodeSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	if _, err := IndexSessions(context.Background(), store, SessionHomes{ClaudeCode: claudeHome}); err != nil {
+	if _, err := IndexSessions(context.Background(), store, SessionHomes{Claude: claudeHome}); err != nil {
 		t.Fatal(err)
 	}
 	handler := NewWebHandler(store)
 
 	response := get(t, handler, "/?q="+url.QueryEscape("Claude searchable"))
 	body := response.Body.String()
-	if !strings.Contains(body, `class="badge source-badge source-claude-code"`) ||
+	if !strings.Contains(body, `class="badge source-badge source-claude"`) ||
 		!strings.Contains(body, `class="source-claude-dot" aria-hidden="true"`) ||
-		strings.Contains(body, `/icons/claude-code.svg`) ||
-		!strings.Contains(body, `href="/sessions/claude-code/`+testSessionID) {
-		t.Fatalf("Claude Code source badge missing: %s", body)
+		strings.Contains(body, `/icons/claude.svg`) ||
+		!strings.Contains(body, `href="/sessions/claude/`+testSessionID) ||
+		!strings.Contains(body, `href="claude://resume?session=`+testSessionID+`"`) ||
+		!strings.Contains(body, `>Open in Claude</a>`) {
+		t.Fatalf("Claude source badge missing: %s", body)
 	}
-	response = get(t, handler, "/sessions/"+sourceClaudeCode+"/"+testSessionID)
-	if strings.Contains(response.Body.String(), "codex://threads/") {
-		t.Fatalf("Claude Code session received a Codex deep link: %s", response.Body.String())
+	response = get(t, handler, "/api/v1/search?q="+url.QueryEscape("Claude searchable"))
+	var apiResponse apiSearchResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &apiResponse); err != nil {
+		t.Fatal(err)
+	}
+	if len(apiResponse.Results) != 1 || apiResponse.Results[0].URL == nil ||
+		*apiResponse.Results[0].URL != "claude://resume?session="+testSessionID {
+		t.Fatalf("Claude API deep link missing: %+v", apiResponse)
+	}
+	response = get(t, handler, "/sessions/"+sourceClaude+"/"+testSessionID)
+	if !strings.Contains(response.Body.String(), `href="claude://resume?session=`+testSessionID+`"`) ||
+		!strings.Contains(response.Body.String(), `>Open in Claude</a>`) ||
+		strings.Contains(response.Body.String(), "codex://threads/") {
+		t.Fatalf("Claude session deep link missing: %s", response.Body.String())
+	}
+}
+
+func TestSessionAppLinkRejectsInvalidID(t *testing.T) {
+	t.Parallel()
+	for _, id := range []string{"", "not-a-uuid", testSessionID + "?unexpected=true"} {
+		if link := sessionAppLink(sourceCodex, id); link != nil {
+			t.Fatalf("sessionAppLink(%q) = %+v", id, link)
+		}
+	}
+	if link := sessionAppLink("unknown", testSessionID); link != nil {
+		t.Fatalf("unknown source link = %+v", link)
 	}
 }
 

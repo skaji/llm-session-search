@@ -205,7 +205,7 @@ func TestIndexCodexSessions(t *testing.T) {
 	}
 }
 
-func TestIndexClaudeCodeSessions(t *testing.T) {
+func TestIndexClaudeSessions(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	codexHome := filepath.Join(root, ".codex")
@@ -252,7 +252,7 @@ func TestIndexClaudeCodeSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	stats, err := IndexSessions(context.Background(), store, SessionHomes{Codex: codexHome, ClaudeCode: claudeHome})
+	stats, err := IndexSessions(context.Background(), store, SessionHomes{Codex: codexHome, Claude: claudeHome})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +264,7 @@ func TestIndexClaudeCodeSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	claude, err := store.GetSession(context.Background(), sourceClaudeCode, testSessionID)
+	claude, err := store.GetSession(context.Background(), sourceClaude, testSessionID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +294,7 @@ func TestIndexClaudeCodeSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(hits) != 1 || hits[0].Source != sourceClaudeCode {
+	if len(hits) != 1 || hits[0].Source != sourceClaude {
 		t.Fatalf("Claude reply was not searchable: %+v", hits)
 	}
 
@@ -310,14 +310,14 @@ func TestIndexClaudeCodeSessions(t *testing.T) {
 	if err := handle.Close(); err != nil {
 		t.Fatal(err)
 	}
-	stats, err = IndexSessions(context.Background(), store, SessionHomes{Codex: codexHome, ClaudeCode: claudeHome})
+	stats, err = IndexSessions(context.Background(), store, SessionHomes{Codex: codexHome, Claude: claudeHome})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if stats.Changed != 1 || stats.Unchanged != 1 || stats.Records != 1 {
 		t.Fatalf("Claude append was not indexed incrementally: %+v", stats)
 	}
-	claude, err = store.GetSession(context.Background(), sourceClaudeCode, testSessionID)
+	claude, err = store.GetSession(context.Background(), sourceClaude, testSessionID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,7 +328,7 @@ func TestIndexClaudeCodeSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(hits) != 1 || hits[0].Source != sourceClaudeCode {
+	if len(hits) != 1 || hits[0].Source != sourceClaude {
 		t.Fatalf("appended Claude reply was not searchable: %+v", hits)
 	}
 }

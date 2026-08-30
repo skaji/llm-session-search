@@ -39,7 +39,7 @@ func discoverClaudeSessionFiles(claudeHome string) ([]sessionFile, bool, error) 
 				return nil, true, err
 			}
 			files = append(files, sessionFile{
-				source: sourceClaudeCode,
+				source: sourceClaude,
 				path:   path,
 				id:     sessionIDFromPath(path),
 				info:   info,
