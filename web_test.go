@@ -147,25 +147,25 @@ func TestWebHandler(t *testing.T) {
 	if !strings.Contains(response.Body.String(), `data-copy-text="`+sessionPath+`"`) {
 		t.Fatalf("session copy button missing: %s", response.Body.String())
 	}
-	if !strings.Contains(response.Body.String(), "final tail marker") {
-		t.Fatalf("session record was truncated: %s", response.Body.String())
+	if strings.Contains(response.Body.String(), "final tail marker") ||
+		!strings.Contains(response.Body.String(), "…") {
+		t.Fatalf("session record was not shortened by default: %s", response.Body.String())
 	}
-	if !strings.Contains(response.Body.String(), `name="shorten" value="1"`) ||
-		strings.Contains(response.Body.String(), `name="shorten" value="1" checked`) {
+	if !strings.Contains(response.Body.String(), `name="shorten" value="1" checked`) ||
+		!strings.Contains(response.Body.String(), `type="hidden" name="shorten" value="0"`) {
 		t.Fatalf("shorten checkbox default is incorrect: %s", response.Body.String())
 	}
 	if strings.Contains(response.Body.String(), "max-height: 420px") {
 		t.Fatalf("session records still have a fixed maximum height: %s", response.Body.String())
 	}
 
-	response = get(t, handler, "/sessions/"+sourceCodex+"/"+testSessionID+"?shorten=1")
-	if strings.Contains(response.Body.String(), "final tail marker") ||
-		!strings.Contains(response.Body.String(), `name="shorten" value="1" checked`) ||
-		!strings.Contains(response.Body.String(), "…") {
-		t.Fatalf("session records were not shortened: %s", response.Body.String())
+	response = get(t, handler, "/sessions/"+sourceCodex+"/"+testSessionID+"?shorten=0")
+	if !strings.Contains(response.Body.String(), "final tail marker") ||
+		strings.Contains(response.Body.String(), `name="shorten" value="1" checked`) {
+		t.Fatalf("full session records were not restored: %s", response.Body.String())
 	}
 	if strings.Contains(response.Body.String(), "max-height: 420px") {
-		t.Fatalf("shortened session records have a fixed maximum height: %s", response.Body.String())
+		t.Fatalf("full session records have a fixed maximum height: %s", response.Body.String())
 	}
 	if !strings.Contains(response.Body.String(), `href="/?q=web&#43;text&amp;from_history=1"`) {
 		t.Fatalf("session page search history missing: %s", response.Body.String())

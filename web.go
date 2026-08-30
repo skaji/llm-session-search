@@ -175,7 +175,7 @@ func (app *webApp) session(w http.ResponseWriter, r *http.Request) {
 	}
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
 	fromHistory := r.URL.Query().Get("from_history") == "1"
-	shorten := r.URL.Query().Get("shorten") == "1"
+	shorten := r.URL.Query().Get("shorten") != "0"
 	records, err := app.store.SessionRecords(r.Context(), session.Key, query, 500)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -526,6 +526,7 @@ const sessionHTML = `<!doctype html>
     <button type="submit">Filter</button>
     <div class="session-options">
       <label><input type="checkbox" name="shorten" value="1"{{if .Shorten}} checked{{end}}> Shorten long records</label>
+      <input type="hidden" name="shorten" value="0">
     </div>
   </form>
   <div class="live-status" role="status" aria-live="polite"></div>
@@ -613,6 +614,9 @@ const appJS = `(() => {
       target.searchParams.delete("q");
     } else {
       target.searchParams.set("q", query);
+    }
+    if (shortenCheckbox) {
+      target.searchParams.set("shorten", shortenCheckbox.checked ? "1" : "0");
     }
     return target;
   }
