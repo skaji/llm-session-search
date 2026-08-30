@@ -150,8 +150,22 @@ func TestWebHandler(t *testing.T) {
 	if !strings.Contains(response.Body.String(), "final tail marker") {
 		t.Fatalf("session record was truncated: %s", response.Body.String())
 	}
+	if !strings.Contains(response.Body.String(), `name="shorten" value="1"`) ||
+		strings.Contains(response.Body.String(), `name="shorten" value="1" checked`) {
+		t.Fatalf("shorten checkbox default is incorrect: %s", response.Body.String())
+	}
 	if strings.Contains(response.Body.String(), "max-height: 420px") {
 		t.Fatalf("session records still have a fixed maximum height: %s", response.Body.String())
+	}
+
+	response = get(t, handler, "/sessions/"+sourceCodex+"/"+testSessionID+"?shorten=1")
+	if strings.Contains(response.Body.String(), "final tail marker") ||
+		!strings.Contains(response.Body.String(), `name="shorten" value="1" checked`) ||
+		!strings.Contains(response.Body.String(), "…") {
+		t.Fatalf("session records were not shortened: %s", response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "max-height: 420px") {
+		t.Fatalf("shortened session records have a fixed maximum height: %s", response.Body.String())
 	}
 	if !strings.Contains(response.Body.String(), `href="/?q=web&#43;text&amp;from_history=1"`) {
 		t.Fatalf("session page search history missing: %s", response.Body.String())
@@ -204,7 +218,7 @@ func TestWebHandler(t *testing.T) {
 	if contentType := response.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "text/javascript") {
 		t.Fatalf("content type = %q", contentType)
 	}
-	for _, expected := range []string{"navigator.clipboard", `closest("[data-copy-text]")`, "copy-feedback-visible", "data-clear-query", `input.value = ""`, "AbortController", "compositionstart", "searchTerms", "form.requestSubmit()", "new FormData(form)", "nextHistory", "#search-history", "setTimeout(() => void runSearch(), 500)"} {
+	for _, expected := range []string{"navigator.clipboard", `closest("[data-copy-text]")`, "copy-feedback-visible", "data-clear-query", `input.value = ""`, "AbortController", "compositionstart", "searchTerms", "form.requestSubmit()", "new FormData(form)", "shortenCheckbox", "nextHistory", "#search-history", "setTimeout(() => void runSearch(), 500)"} {
 		if !strings.Contains(response.Body.String(), expected) {
 			t.Fatalf("app.js is missing %q", expected)
 		}

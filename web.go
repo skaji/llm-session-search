@@ -41,6 +41,7 @@ type sessionPage struct {
 	Records     []Record
 	History     []string
 	FromHistory bool
+	Shorten     bool
 }
 
 type appLink struct {
@@ -174,10 +175,17 @@ func (app *webApp) session(w http.ResponseWriter, r *http.Request) {
 	}
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
 	fromHistory := r.URL.Query().Get("from_history") == "1"
+	shorten := r.URL.Query().Get("shorten") == "1"
 	records, err := app.store.SessionRecords(r.Context(), session.Key, query, 500)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if shorten {
+		terms := parseSearchQuery(query)
+		for index := range records {
+			records[index].Text = makeSnippet(records[index].Text, terms, 600)
+		}
 	}
 	history, err := app.store.ListSearchHistory(r.Context(), searchHistoryLimit)
 	if err != nil {
@@ -190,6 +198,7 @@ func (app *webApp) session(w http.ResponseWriter, r *http.Request) {
 		Records:     records,
 		History:     history,
 		FromHistory: fromHistory,
+		Shorten:     shorten,
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := app.sessionTemplate.Execute(w, page); err != nil {
@@ -269,8 +278,11 @@ a { color: #0c6959; }
 h1 { margin: 0 0 8px; font-size: 30px; letter-spacing: -0.03em; }
 .subtle { color: #66645f; font-size: 14px; }
 .search { display: flex; flex-wrap: wrap; gap: 8px; margin: 28px 0 6px; }
+.session-options { display: flex; flex-basis: 100%; align-items: center; margin-top: 2px; color: #66645f; font-size: 14px; }
+.session-options label { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
+.session-options input { width: auto; margin: 0; }
 .query-field { position: relative; flex: 1; min-width: 0; }
-.search input { width: 100%; padding: 13px 44px 13px 15px; border: 1px solid #c8c5bd; border-radius: 9px; background: #fff; color: #20201e; font-size: 16px; }
+.query-field input { width: 100%; padding: 13px 44px 13px 15px; border: 1px solid #c8c5bd; border-radius: 9px; background: #fff; color: #20201e; font-size: 16px; }
 .query-clear { position: absolute; top: 50%; right: 8px; width: 32px; height: 32px; padding: 0; transform: translateY(-50%); border-radius: 999px; background: transparent; color: #77736c; font-size: 22px; font-weight: 400; line-height: 1; }
 .query-clear:hover { background: #ebe9e3; color: #20201e; }
 .query-clear[hidden] { display: none; }
@@ -325,10 +337,10 @@ mark { padding: 0 2px; border-radius: 3px; background: #ffe169; color: #25200b; 
 @media (prefers-color-scheme: dark) {
   body { background: #191a18; color: #edede8; }
   .card, .history-pane { background: #222320; border-color: #3b3c38; }
-  .search input { background: #222320; color: #edede8; border-color: #4c4d48; }
+  .query-field input { background: #222320; color: #edede8; border-color: #4c4d48; }
   .query-clear { color: #aaa9a2; }
   .query-clear:hover { background: #363732; color: #edede8; }
-  .subtle, .meta, .live-status { color: #aaa9a2; }
+  .subtle, .meta, .live-status, .session-options { color: #aaa9a2; }
   .record pre { background: #171815; color: #e8e8e2; }
   .button-secondary { background: #38423e; color: #b9e1d8; }
   .badge { background: #363732; color: #d2d1ca; }
@@ -512,6 +524,9 @@ const sessionHTML = `<!doctype html>
     </div>
     {{if .FromHistory}}<input type="hidden" name="from_history" value="1">{{end}}
     <button type="submit">Filter</button>
+    <div class="session-options">
+      <label><input type="checkbox" name="shorten" value="1"{{if .Shorten}} checked{{end}}> Shorten long records</label>
+    </div>
   </form>
   <div class="live-status" role="status" aria-live="polite"></div>
 
@@ -571,6 +586,7 @@ const appJS = `(() => {
 
   const form = document.querySelector("form[data-live-search]");
   const input = form?.querySelector('input[name="q"]');
+  const shortenCheckbox = form?.querySelector('input[name="shorten"]');
   const clearButton = form?.querySelector("[data-clear-query]");
   const status = document.querySelector(".live-status");
   let results = document.querySelector("#results");
@@ -715,6 +731,7 @@ const appJS = `(() => {
     input.focus();
     void runSearch();
   });
+  shortenCheckbox?.addEventListener("change", () => void runSearch());
   form.addEventListener("submit", cancelPending);
   updateClearButton();
 })();`
