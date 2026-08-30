@@ -27,12 +27,12 @@ var uuidPattern = regexp.MustCompile(`(?i)([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[
 const (
 	maxIndexedStringBytes = 2 << 20
 	sourceCodex           = "codex"
-	sourceClaudeCode      = "claude-code"
+	sourceClaude          = "claude"
 )
 
 type SessionHomes struct {
-	Codex      string
-	ClaudeCode string
+	Codex  string
+	Claude string
 }
 
 type sessionSource struct {
@@ -46,8 +46,8 @@ func (homes SessionHomes) sources() []sessionSource {
 	if homes.Codex != "" {
 		sources = append(sources, sessionSource{id: sourceCodex, name: "Codex", home: homes.Codex})
 	}
-	if homes.ClaudeCode != "" {
-		sources = append(sources, sessionSource{id: sourceClaudeCode, name: "Claude Code", home: homes.ClaudeCode})
+	if homes.Claude != "" {
+		sources = append(sources, sessionSource{id: sourceClaude, name: "Claude", home: homes.Claude})
 	}
 	return sources
 }
@@ -56,7 +56,7 @@ func (source sessionSource) discover() ([]sessionFile, bool, error) {
 	switch source.id {
 	case sourceCodex:
 		return discoverCodexSessionFiles(source.home)
-	case sourceClaudeCode:
+	case sourceClaude:
 		return discoverClaudeSessionFiles(source.home)
 	default:
 		return nil, false, fmt.Errorf("unsupported session source %q", source.id)
@@ -152,7 +152,7 @@ func discoverSessionFiles(homes SessionHomes) ([]sessionFile, error) {
 		foundSource = foundSource || found
 	}
 	if !foundSource {
-		return nil, errors.New("no Codex or Claude Code session directories found")
+		return nil, errors.New("no Codex or Claude session directories found")
 	}
 	slices.SortFunc(files, func(a, b sessionFile) int {
 		if bySource := strings.Compare(a.source, b.source); bySource != 0 {
@@ -372,7 +372,7 @@ func extractSessionLine(source string, line []byte) extractedLine {
 	switch source {
 	case sourceCodex:
 		return extractCodexJSONLine(line)
-	case sourceClaudeCode:
+	case sourceClaude:
 		return extractClaudeJSONLine(line)
 	default:
 		return extractedLine{}

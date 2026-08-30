@@ -36,7 +36,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	flags.SetOutput(stderr)
 	flags.Usage = func() { printUsage(stderr, flags) }
 	codexHome := flags.String("codex-home", defaults.codexHome, "Codex data directory")
-	claudeHome := flags.String("claude-home", defaults.claudeHome, "Claude Code data directory")
+	claudeHome := flags.String("claude-home", defaults.claudeHome, "Claude data directory")
 	dataDir := flags.String("data-dir", defaults.dataDir, "Application data directory")
 	listen := flags.String("listen", "127.0.0.1:8787", "HTTP listen address")
 	indexInterval := flags.Duration("index-interval", time.Minute, "Background index interval (0 disables it)")
@@ -72,7 +72,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	absoluteClaudeHome, err := absolutePath(*claudeHome)
 	if err != nil {
-		return fmt.Errorf("resolve Claude Code data directory: %w", err)
+		return fmt.Errorf("resolve Claude data directory: %w", err)
 	}
 	absoluteDataDir, err := absolutePath(*dataDir)
 	if err != nil {
@@ -96,7 +96,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	homes := SessionHomes{Codex: absoluteCodexHome, ClaudeCode: absoluteClaudeHome}
+	homes := SessionHomes{Codex: absoluteCodexHome, Claude: absoluteClaudeHome}
 	for _, source := range homes.sources() {
 		_, _ = fmt.Fprintf(stdout, "Indexing %s sessions from %s...\n", source.name, source.home)
 	}
@@ -258,7 +258,7 @@ func printUsage(w io.Writer, flags *flag.FlagSet) {
 	_, _ = fmt.Fprintln(w, `Usage:
   llm-session-search [options]
 
-Index Codex and Claude Code JSONL sessions and start the local search web application.
+Index Codex and Claude JSONL sessions and start the local search web application.
 
 Options:`)
 	flags.PrintDefaults()

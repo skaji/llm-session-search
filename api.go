@@ -101,7 +101,7 @@ func (app *webApp) apiSearch(w http.ResponseWriter, r *http.Request) {
 			Source:     hit.Source,
 			SessionID:  hit.ID,
 			Path:       hit.Path,
-			URL:        codexSessionURL(hit.Source, hit.ID),
+			URL:        sessionAppURL(hit.Source, hit.ID),
 			Title:      hit.Title,
 			CWD:        hit.CWD,
 			Archived:   hit.Archived,
@@ -146,11 +146,12 @@ func apiTimestamp(value sql.NullInt64) *string {
 	return &formatted
 }
 
-func codexSessionURL(source, id string) *string {
-	if source != sourceCodex || !uuidPattern.MatchString(id) {
+func sessionAppURL(source, id string) *string {
+	link := sessionAppLink(source, id)
+	if link == nil {
 		return nil
 	}
-	value := "codex://threads/" + id
+	value := string(link.URL)
 	return &value
 }
 
