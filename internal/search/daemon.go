@@ -73,6 +73,9 @@ func handleDaemonOperation(operation daemonOperation, dataDir string, stdout io.
 	// Reborn re-executes the binary with the original arguments. A child started
 	// by --daemon-restart must proceed to the server instead of restarting again.
 	if daemon.WasReborn() && (operation == daemonOperationStart || operation == daemonOperationRestart) {
+		if err := disclaimDaemon(); err != nil {
+			return daemonResult{}, err
+		}
 		if err := state.reborn(); err != nil {
 			return daemonResult{}, err
 		}

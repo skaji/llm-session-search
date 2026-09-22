@@ -112,6 +112,11 @@ Set `--index-interval 0` to disable periodic updates. The startup update always
 runs. When using a custom `--data-dir`, pass the same option to later daemon
 status and control commands.
 
+On Apple Silicon Macs running macOS 27 or later, daemon startup detaches the
+server from the launching app's background-process responsibility. This allows
+the server to keep running when the terminal's "Stop Running in Background"
+action is used. Other platforms retain the existing daemon startup behavior.
+
 ## Privacy
 
 The server listens on `127.0.0.1` by default and uses no external assets. The
