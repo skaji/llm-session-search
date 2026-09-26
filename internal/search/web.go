@@ -51,7 +51,10 @@ type appLink struct {
 
 func NewWebHandler(store *Store) http.Handler {
 	functions := template.FuncMap{
-		"formatTime":     unixMilliString,
+		"formatTime": unixMilliString,
+		"relativeTime": func(value sql.NullInt64) string {
+			return relativeTime(time.Since(time.UnixMilli(value.Int64)))
+		},
 		"formatSize":     formatSize,
 		"sourceName":     sourceName,
 		"sessionAppLink": sessionAppLink,
@@ -246,6 +249,30 @@ func searchURL(query string, offset int, fromHistory bool) string {
 	return "/?" + values.Encode()
 }
 
+func relativeTime(elapsed time.Duration) string {
+	for _, unit := range []struct {
+		duration time.Duration
+		name     string
+	}{
+		{365 * 24 * time.Hour, "year"},
+		{30 * 24 * time.Hour, "month"},
+		{7 * 24 * time.Hour, "week"},
+		{24 * time.Hour, "day"},
+		{time.Hour, "hour"},
+		{time.Minute, "minute"},
+	} {
+		if elapsed >= unit.duration {
+			count := int64(elapsed / unit.duration)
+			name := unit.name
+			if count != 1 {
+				name += "s"
+			}
+			return fmt.Sprintf("%d %s ago", count, name)
+		}
+	}
+	return "just now"
+}
+
 func formatSize(size int64) string {
 	const unit = 1024
 	if size < unit {
@@ -261,21 +288,21 @@ func formatSize(size int64) string {
 }
 
 const baseCSS = `
-:root { color-scheme: light dark; font-family: ui-sans-serif, system-ui, sans-serif; }
+:root { color-scheme: light; font-family: ui-sans-serif, system-ui, sans-serif; }
 * { box-sizing: border-box; }
-body { margin: 0; background: #f5f5f2; color: #20201e; }
-main { width: min(1440px, calc(100% - 48px)); margin: 0 auto; padding: 40px 0 80px; }
+body { margin: 0; background: #fff; color: #20201e; }
+main { width: min(1440px, calc(100% - 48px)); margin: 0 auto; padding: 24px 0 64px; }
 .app-shell { display: grid; grid-template-columns: 270px minmax(0, 1fr); gap: 32px; align-items: start; }
 .content-pane { min-width: 0; }
-.history-pane { position: sticky; top: 24px; max-height: calc(100vh - 48px); overflow: auto; padding: 18px; border: 1px solid #d8d5cd; border-radius: 12px; background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / 4%); }
+.history-pane { position: sticky; top: 24px; max-height: calc(100vh - 48px); overflow: auto; padding: 14px 0; border-top: 1px solid #dde3eb; }
 .history-pane h2 { margin: 0 0 12px; font-size: 15px; }
 .history-list { display: grid; gap: 4px; }
-.history-link { display: block; overflow: hidden; padding: 7px 9px; border-radius: 7px; color: #464541; font-size: 13px; line-height: 1.35; text-decoration: none; text-overflow: ellipsis; white-space: nowrap; }
-.history-link:hover { background: #efeee9; color: #0c6959; }
-.history-link-active, .history-link-active:hover { background: #dcece7; color: #0a6253; font-weight: 650; }
+.history-link { display: block; overflow: hidden; padding: 7px 9px; border-radius: 7px; color: #2056ab; font-size: 13px; line-height: 1.35; text-decoration: none; text-overflow: ellipsis; white-space: nowrap; }
+.history-link:hover { background: #edf0f4; color: #2056ab; }
+.history-link-active, .history-link-active:hover { background: #e6efff; color: #2056ab; font-weight: 650; }
 .history-empty { color: #77736c; font-size: 13px; line-height: 1.5; }
-a { color: #0c6959; }
-h1 { margin: 0 0 8px; font-size: 30px; letter-spacing: -0.03em; }
+a { color: #2056ab; }
+h1 { margin: 0 0 8px; font-size: 24px; }
 .subtle { color: #66645f; font-size: 14px; }
 .search { display: flex; flex-wrap: wrap; gap: 8px; margin: 28px 0 6px; }
 .session-options { display: flex; flex-basis: 100%; align-items: center; margin-top: 2px; color: #66645f; font-size: 14px; }
@@ -283,26 +310,23 @@ h1 { margin: 0 0 8px; font-size: 30px; letter-spacing: -0.03em; }
 .session-options input { width: auto; margin: 0; }
 .query-field { position: relative; flex: 1; min-width: 0; }
 .query-field input { width: 100%; padding: 13px 44px 13px 15px; border: 1px solid #c8c5bd; border-radius: 9px; background: #fff; color: #20201e; font-size: 16px; }
-.query-clear { position: absolute; top: 50%; right: 8px; width: 32px; height: 32px; padding: 0; transform: translateY(-50%); border-radius: 999px; background: transparent; color: #77736c; font-size: 22px; font-weight: 400; line-height: 1; }
+.query-clear { position: absolute; top: 50%; right: 8px; width: 32px; height: 32px; padding: 0; transform: translateY(-50%); border-radius: 999px; background: transparent; color: #77736c; font-size: 22px; font-weight: 400; line-height: 1; border: 0; }
 .query-clear:hover { background: #ebe9e3; color: #20201e; }
 .query-clear[hidden] { display: none; }
 .live-status { min-height: 20px; margin: 0 0 20px; color: #66645f; font-size: 13px; }
-button, .button { display: inline-block; padding: 11px 16px; border: 0; border-radius: 9px; background: #116b5b; color: #fff; font-weight: 650; text-decoration: none; cursor: pointer; }
+button, .button { display: inline-block; padding: 11px 16px; border: 1px solid #c8c5bd; border-radius: 6px; background: #fff; color: #20201e; font: inherit; text-decoration: none; cursor: pointer; }
 button:disabled { cursor: default; opacity: 0.7; }
 .button-row { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
-.button-secondary { background: #e4e9e6; color: #28554c; }
 .button-small { flex: none; padding: 6px 10px; font-size: 12px; }
 .card-actions { display: flex; flex: none; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
-.copy-control { position: relative; display: inline-flex; }
-.copy-feedback { position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 1; padding: 5px 8px; border-radius: 6px; background: #252622; color: #fff; font-size: 12px; font-weight: 650; line-height: 1.2; opacity: 0; pointer-events: none; transform: translateY(3px); transition: opacity 120ms ease, transform 120ms ease; white-space: nowrap; }
-.copy-feedback::after { position: absolute; top: 100%; right: 14px; border: 5px solid transparent; border-top-color: #252622; content: ""; }
-.copy-feedback-visible { opacity: 1; transform: translateY(0); }
 .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .card-head h2 { min-width: 0; overflow-wrap: anywhere; }
-.list { display: grid; gap: 12px; }
-.card { padding: 18px 20px; border: 1px solid #d8d5cd; border-radius: 12px; background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / 4%); }
+.list { display: grid; }
+.card { padding: 14px 0; border-top: 1px solid #dde3eb; }
 .card h2 { margin: 0; font-size: 17px; }
-.meta { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 7px; color: #6b6862; font-size: 13px; }
+.card h2 a { text-decoration: none; }
+.card h2 a:hover { text-decoration: underline; }
+.meta { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 7px; color: #6b6862; font-size: 13px; overflow-wrap: anywhere; }
 .snippet { margin: 14px 0 0; overflow-wrap: anywhere; white-space: pre-wrap; line-height: 1.5; }
 mark { padding: 0 2px; border-radius: 3px; background: #ffe169; color: #25200b; }
 .badge { padding: 2px 7px; border-radius: 999px; background: #ebe9e3; color: #5d5a55; font-size: 12px; }
@@ -319,8 +343,8 @@ mark { padding: 0 2px; border-radius: 3px; background: #ffe169; color: #25200b; 
 .pager { display: flex; justify-content: space-between; margin-top: 22px; }
 .session-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
 .session-head h1 { overflow-wrap: anywhere; }
-.record { margin: 12px 0; }
-.record pre { margin: 10px 0 0; padding: 15px; border-radius: 8px; background: #f6f5f1; color: #24231f; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.record .meta { margin-top: 0; }
+.record pre { margin: 10px 0 0; color: #24231f; white-space: pre-wrap; overflow-wrap: anywhere; font: 14px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .back { display: inline-block; margin-bottom: 22px; text-decoration: none; }
 .empty { padding: 40px 0; text-align: center; color: #77736c; }
 @media (max-width: 860px) {
@@ -333,29 +357,6 @@ mark { padding: 0 2px; border-radius: 3px; background: #ffe169; color: #25200b; 
 @media (max-width: 520px) {
   .search { flex-direction: column; }
   .search > button { width: 100%; }
-}
-@media (prefers-color-scheme: dark) {
-  body { background: #191a18; color: #edede8; }
-  .card, .history-pane { background: #222320; border-color: #3b3c38; }
-  .query-field input { background: #222320; color: #edede8; border-color: #4c4d48; }
-  .query-clear { color: #aaa9a2; }
-  .query-clear:hover { background: #363732; color: #edede8; }
-  .subtle, .meta, .live-status, .session-options { color: #aaa9a2; }
-  .record pre { background: #171815; color: #e8e8e2; }
-  .button-secondary { background: #38423e; color: #b9e1d8; }
-  .badge { background: #363732; color: #d2d1ca; }
-  .badge-user { background: #203d59; color: #aed6ff; }
-  .badge-assistant { background: #244331; color: #b8e4c5; }
-  .badge-commentary { background: #4c381a; color: #ffd99a; }
-  .badge-final-answer { background: #403050; color: #ddc5f6; }
-  .source-codex { background: #3b3c38; color: #edede8; }
-  .source-claude { background: #523126; color: #f1b39d; }
-  mark { background: #8a6c00; color: #fff4bd; }
-  a { color: #66cbb6; }
-  .history-link { color: #d0cfc8; }
-  .history-link:hover { background: #30312d; color: #66cbb6; }
-  .history-link-active, .history-link-active:hover { background: #29443d; color: #8bdecc; }
-  .history-empty { color: #92918a; }
 }
 `
 
@@ -421,10 +422,6 @@ const indexHTML = `<!doctype html>
           <h2><a href="/sessions/{{.Session.Source}}/{{.Session.ID}}?q={{urlquery $.Query}}&amp;shorten=1{{if $.FromHistory}}&amp;from_history=1{{end}}">{{if .Session.Title}}{{.Session.Title}}{{else}}{{.Session.ID}}{{end}}</a></h2>
           <div class="card-actions">
             {{with sessionAppLink .Session.Source .Session.ID}}<a class="button button-small" href="{{.URL}}">{{.Label}}</a>{{end}}
-            <span class="copy-control">
-              <button type="button" class="button-secondary button-small" data-copy-text="{{.Session.Path}}">Copy JSONL Path</button>
-              <span class="copy-feedback" role="status" aria-live="polite"></span>
-            </span>
           </div>
         </div>
         <div class="meta">
@@ -433,7 +430,7 @@ const indexHTML = `<!doctype html>
           {{if .Record.Role}}<span class="badge {{badgeClass .Record.Role}}">{{.Record.Role}}</span>{{end}}
           {{if .Record.Phase}}<span class="badge {{badgeClass .Record.Phase}}">{{.Record.Phase}}</span>{{end}}
           <span>{{.MatchCount}} matches</span>
-          {{if .Session.UpdatedAtMS.Valid}}<span>updated {{formatTime .Session.UpdatedAtMS}}</span>{{end}}
+          {{if .Session.UpdatedAtMS.Valid}}<span>{{relativeTime .Session.UpdatedAtMS}}</span>{{end}}
           <span>line {{.Record.LineNumber}}</span>
         </div>
         <p class="snippet">{{range highlight .Snippet $.Query}}{{if .Match}}<mark>{{.Text}}</mark>{{else}}{{.Text}}{{end}}{{end}}</p>
@@ -455,17 +452,12 @@ const indexHTML = `<!doctype html>
           <h2><a href="/sessions/{{.Source}}/{{.ID}}?shorten=1">{{if .Title}}{{.Title}}{{else}}{{.ID}}{{end}}</a></h2>
           <div class="card-actions">
             {{with sessionAppLink .Source .ID}}<a class="button button-small" href="{{.URL}}">{{.Label}}</a>{{end}}
-            <span class="copy-control">
-              <button type="button" class="button-secondary button-small" data-copy-text="{{.Path}}">Copy JSONL Path</button>
-              <span class="copy-feedback" role="status" aria-live="polite"></span>
-            </span>
           </div>
         </div>
         <div class="meta">
           ` + sourceBadgeHTML + `
           {{if .Archived}}<span class="badge archived">archived</span>{{end}}
-          {{if .StartedAtMS.Valid}}<span>started {{formatTime .StartedAtMS}}</span>{{end}}
-          {{if .UpdatedAtMS.Valid}}<span>updated {{formatTime .UpdatedAtMS}}</span>{{end}}
+          {{if .UpdatedAtMS.Valid}}<span>{{relativeTime .UpdatedAtMS}}</span>{{end}}
           <span>{{formatSize .Size}}</span>
           {{if .CWD}}<span>{{.CWD}}</span>{{end}}
         </div>
@@ -510,10 +502,6 @@ const sessionHTML = `<!doctype html>
     </div>
     <div class="button-row">
       {{with sessionAppLink .Session.Source .Session.ID}}<a class="button" href="{{.URL}}">{{.Label}}</a>{{end}}
-      <span class="copy-control">
-        <button type="button" class="button-secondary" data-copy-text="{{.Session.Path}}">Copy JSONL Path</button>
-        <span class="copy-feedback" role="status" aria-live="polite"></span>
-      </span>
     </div>
   </header>
 
@@ -534,9 +522,8 @@ const sessionHTML = `<!doctype html>
   {{range .Records}}
     <article class="card record">
       <div class="meta">
-        <span>line {{.LineNumber}}</span>
         {{if .Role}}<span class="badge {{badgeClass .Role}}">{{.Role}}</span>{{end}}
-        {{if .Phase}}<span class="badge {{badgeClass .Phase}}">{{.Phase}}</span>{{end}}
+        <span>line {{.LineNumber}}</span>
         {{if .TimestampMS.Valid}}<span>{{formatTime .TimestampMS}}</span>{{end}}
       </div>
       <pre>{{range highlight .Text $.Query}}{{if .Match}}<mark>{{.Text}}</mark>{{else}}{{.Text}}{{end}}{{end}}</pre>
@@ -551,39 +538,6 @@ const sessionHTML = `<!doctype html>
 </html>`
 
 const appJS = `(() => {
-  const copyTimers = new WeakMap();
-
-  function showCopyFeedback(button, message) {
-    const feedback = button.parentElement?.querySelector(".copy-feedback");
-    if (!feedback) return;
-
-    const previousTimer = copyTimers.get(feedback);
-    if (previousTimer) window.clearTimeout(previousTimer);
-    feedback.textContent = message;
-    feedback.classList.add("copy-feedback-visible");
-    copyTimers.set(feedback, window.setTimeout(() => {
-      feedback.classList.remove("copy-feedback-visible");
-      copyTimers.delete(feedback);
-    }, 1500));
-  }
-
-  async function copyText(button) {
-    const text = button.dataset.copyText;
-    if (!text) return;
-
-    try {
-      await navigator.clipboard.writeText(text);
-      showCopyFeedback(button, "Copied");
-    } catch (_) {
-      showCopyFeedback(button, "Copy failed");
-    }
-  }
-
-  document.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-copy-text]");
-    if (button) void copyText(button);
-  });
-
   const form = document.querySelector("form[data-live-search]");
   const input = form?.querySelector('input[name="q"]');
   const shortenCheckbox = form?.querySelector('input[name="shorten"]');

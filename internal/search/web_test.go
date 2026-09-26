@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestWebHandler(t *testing.T) {
@@ -79,10 +80,8 @@ func TestWebHandler(t *testing.T) {
 	}
 
 	response = get(t, handler, "/")
-	if !strings.Contains(response.Body.String(), `data-copy-text="`+sessionPath+`"`) ||
-		!strings.Contains(response.Body.String(), `href="codex://threads/`+testSessionID+`"`) ||
+	if !strings.Contains(response.Body.String(), `href="codex://threads/`+testSessionID+`"`) ||
 		!strings.Contains(response.Body.String(), `>Open in Codex</a>`) ||
-		!strings.Contains(response.Body.String(), `class="copy-feedback" role="status" aria-live="polite"`) ||
 		!strings.Contains(response.Body.String(), `data-clear-query aria-label="Clear search" hidden`) ||
 		!strings.Contains(response.Body.String(), `<link rel="icon" href="/favicon.svg" type="image/svg+xml">`) ||
 		!strings.Contains(response.Body.String(), "Search local Codex and Claude sessions.") ||
@@ -91,15 +90,12 @@ func TestWebHandler(t *testing.T) {
 		!strings.Contains(response.Body.String(), `id="search-history"`) ||
 		!strings.Contains(response.Body.String(), "Your recent searches will appear here.") ||
 		!strings.Contains(response.Body.String(), `href="/sessions/`+sourceCodex+`/`+testSessionID+`?shorten=1"`) {
-		t.Fatalf("recent session copy button missing: status=%d body=%s", response.Code, response.Body.String())
+		t.Fatalf("recent session content missing: status=%d body=%s", response.Code, response.Body.String())
 	}
 
 	response = get(t, handler, "/?q="+url.QueryEscape("web text"))
 	if !strings.Contains(response.Body.String(), "searchable <mark>web</mark> <mark>text</mark>") || !strings.Contains(response.Body.String(), "Web session") {
 		t.Fatalf("search result missing: %s", response.Body.String())
-	}
-	if !strings.Contains(response.Body.String(), `data-copy-text="`+sessionPath+`"`) {
-		t.Fatalf("search result copy button missing: %s", response.Body.String())
 	}
 	if !strings.Contains(response.Body.String(), `href="/sessions/`+sourceCodex+`/`+testSessionID+`?q=web&#43;text&amp;shorten=1"`) {
 		t.Fatalf("search result did not enable record shortening: %s", response.Body.String())
@@ -151,9 +147,6 @@ func TestWebHandler(t *testing.T) {
 	if !strings.Contains(response.Body.String(), `data-clear-query aria-label="Clear filter" hidden`) {
 		t.Fatalf("empty session filter clear button missing: %s", response.Body.String())
 	}
-	if !strings.Contains(response.Body.String(), `data-copy-text="`+sessionPath+`"`) {
-		t.Fatalf("session copy button missing: %s", response.Body.String())
-	}
 	if !strings.Contains(response.Body.String(), "final tail marker") {
 		t.Fatalf("direct session record was shortened: %s", response.Body.String())
 	}
@@ -189,7 +182,6 @@ func TestWebHandler(t *testing.T) {
 	for _, badge := range []string{
 		`class="badge badge-user">user`,
 		`class="badge badge-assistant">assistant`,
-		`class="badge badge-commentary">commentary`,
 	} {
 		if !strings.Contains(response.Body.String(), badge) {
 			t.Fatalf("session page is missing %q: %s", badge, response.Body.String())
@@ -225,13 +217,10 @@ func TestWebHandler(t *testing.T) {
 	if contentType := response.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "text/javascript") {
 		t.Fatalf("content type = %q", contentType)
 	}
-	for _, expected := range []string{"navigator.clipboard", `closest("[data-copy-text]")`, "copy-feedback-visible", "data-clear-query", `input.value = ""`, "AbortController", "compositionstart", "searchTerms", "form.requestSubmit()", "new FormData(form)", "shortenCheckbox", "nextHistory", "#search-history", "setTimeout(() => void runSearch(), 500)"} {
+	for _, expected := range []string{"data-clear-query", `input.value = ""`, "AbortController", "compositionstart", "searchTerms", "form.requestSubmit()", "new FormData(form)", "shortenCheckbox", "nextHistory", "#search-history", "setTimeout(() => void runSearch(), 500)"} {
 		if !strings.Contains(response.Body.String(), expected) {
 			t.Fatalf("app.js is missing %q", expected)
 		}
-	}
-	if strings.Contains(response.Body.String(), "button.textContent") {
-		t.Fatalf("app.js still changes the copy button label: %s", response.Body.String())
 	}
 
 	response = get(t, handler, "/favicon.svg")
@@ -487,5 +476,33 @@ func TestMakeSnippet(t *testing.T) {
 	snippet := makeSnippet(text, []string{"needle"}, 80)
 	if !strings.Contains(snippet, "NEEDLE") || len([]rune(snippet)) > 82 {
 		t.Fatalf("unexpected snippet: %q", snippet)
+	}
+}
+
+func TestRelativeTime(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		elapsed time.Duration
+		want    string
+	}{
+		{-time.Minute, "just now"},
+		{0, "just now"},
+		{59 * time.Second, "just now"},
+		{time.Minute, "1 minute ago"},
+		{2 * time.Minute, "2 minutes ago"},
+		{time.Hour, "1 hour ago"},
+		{23 * time.Hour, "23 hours ago"},
+		{24 * time.Hour, "1 day ago"},
+		{6 * 24 * time.Hour, "6 days ago"},
+		{7 * 24 * time.Hour, "1 week ago"},
+		{14 * 24 * time.Hour, "2 weeks ago"},
+		{30 * 24 * time.Hour, "1 month ago"},
+		{60 * 24 * time.Hour, "2 months ago"},
+		{365 * 24 * time.Hour, "1 year ago"},
+		{730 * 24 * time.Hour, "2 years ago"},
+	} {
+		if got := relativeTime(test.elapsed); got != test.want {
+			t.Errorf("relativeTime(%s) = %q, want %q", test.elapsed, got, test.want)
+		}
 	}
 }
